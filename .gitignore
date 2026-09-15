@@ -50,3 +50,10 @@ skill-observations/
 .impeccable/
 .codegraph/
 opencode.json
+
+# Colab export duplicates (canonical weights live in models/; keep local-only)
+notebooks/best.onnx
+notebooks/best.pt
+notebooks/confusion_matrix.png
+notebooks/results.png
+notebooks/data.yaml
