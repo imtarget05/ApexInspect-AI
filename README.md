@@ -137,7 +137,7 @@ Harness-of-Target/
 ├── data/
 │   └── sops/                   # Standard Operating Procedures (SOPs)
 ├── models/
-│   └── download_model.py       # Model exporter and downloader
+│   └── train.py                # Model training and ONNX exporter
 ├── src/
 │   ├── vision/                 # OpenCV stream & ONNX Runtime detector
 │   ├── agent/                  # LangGraph StateGraph, HITL, and RAG
