@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python — pytest (vision + backend + agent)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Show installed versions
+        run: pip list | grep -Ei 'fastapi|opencv|onnxruntime|langgraph|langchain|sqlalchemy|streamlit|chromadb|pytest'
+
+      - name: Run test suite (vision simulator + detector, FastAPI ingestion, LangGraph agent)
+        run: python -m pytest tests/ -q --tb=short
+
+  docker-build:
+    name: Docker — image build smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push — validates Dockerfile)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: apexinspect-ai:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

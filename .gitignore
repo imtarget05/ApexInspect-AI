@@ -1,0 +1,50 @@
+# Python & Virtual Environment
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Environment Variables & Secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Data & Model Weights
+data/sample_images/*.png
+data/sample_images/*.jpg
+models/*.pt
+models/*.onnx
+!models/download_model.py
+*.sqlite
+*.db
+factory.db
+
+# Logs & OS
+*.log
+.DS_Store
+Thumbs.db
+
+# Agent Context & Workflow Internal Artifacts (Stealth)
+AGENTS.md
+CLAUDE.md
+PRODUCT.md
+DESIGN.md
+plans/
+tasks/
+.ai/
+.archcontext/
+.opencode/
+.kilocode/
+.kilo/
+.clinerules/
+.claude/
+skill-observations/
+.impeccable/
+.codegraph/
+.env.example
+opencode.json
