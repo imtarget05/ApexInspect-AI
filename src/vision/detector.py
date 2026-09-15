@@ -2,7 +2,47 @@ import os
 import time
 import cv2
 import numpy as np
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
+
+def resolve_model_path(provided: Optional[str] = None) -> str:
+    """Resolve the canonical ONNX model path.
+
+    Priority: explicit arg -> $MODEL_PATH -> models/yolov8n_pcb_defect.onnx
+    -> notebooks/best.onnx (Colab export fallback).
+    Relative paths are resolved against the project root.
+    """
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    candidates: List[str] = []
+    if provided:
+        candidates.append(provided)
+    env_path = os.getenv("MODEL_PATH", "").strip().strip("\"'")
+    if env_path:
+        candidates.append(env_path)
+    candidates += [
+        "models/yolov8n_pcb_defect.onnx",
+        "notebooks/best.onnx",
+    ]
+    for cand in candidates:
+        if os.path.isabs(cand):
+            if os.path.exists(cand):
+                return cand
+            continue
+        abs_cand = os.path.join(project_root, cand)
+        if os.path.exists(abs_cand):
+            return abs_cand
+        if os.path.exists(cand):
+            return os.path.abspath(cand)
+    # Nothing found: return the canonical destination (absolute) so
+    # error messages / get_model_info() point at the expected location.
+    return os.path.join(project_root, "models/yolov8n_pcb_defect.onnx")
+
 
 class PCBDefectDetector:
     """
@@ -11,6 +51,12 @@ class PCBDefectDetector:
     """
 
     CLASS_NAMES = ["missing_hole", "mouse_bite", "open_circuit", "short_circuit", "spur", "spurious_copper"]
+
+    # Raw training labels (see notebooks/data.yaml: `short`) mapped to the
+    # canonical names used across the app (simulator, backend, SOP RAG).
+    CLASS_ALIASES = {
+        "short": "short_circuit",
+    }
 
     COLOR_MAP = {
         "short_circuit": (0, 0, 255),    # Red
@@ -22,11 +68,20 @@ class PCBDefectDetector:
         "spurious_copper": (200, 100, 0)
     }
 
-    def __init__(self, model_path: str = "models/yolov8n_pcb_defect.onnx", conf_threshold: float = 0.50):
-        self.model_path = model_path
+    def __init__(self, model_path: str = None, conf_threshold: float = None):
+        resolved = resolve_model_path(model_path)
+        if conf_threshold is None:
+            try:
+                conf_threshold = float(os.getenv("CONFIDENCE_THRESHOLD", "0.50"))
+            except ValueError:
+                conf_threshold = 0.50
+        self.model_path = resolved
         self.conf_threshold = conf_threshold
         self.session = None
         self.use_onnx = False
+        self.input_name = ""
+        self.output_name = ""
+        self.model_meta: Dict[str, Any] = {}
 
         self._initialize_engine()
 
@@ -37,17 +92,44 @@ class PCBDefectDetector:
                 import onnxruntime as ort
                 opts = ort.SessionOptions()
                 opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-                opts.intra_op_num_threads = 2
+                # Use available CPU cores (cloud 2-vCPU target: 2 threads; local: more).
+                try:
+                    opts.intra_op_num_threads = max(2, (os.cpu_count() or 2) // 2)
+                except Exception:
+                    opts.intra_op_num_threads = 2
                 self.session = ort.InferenceSession(self.model_path, opts, providers=["CPUExecutionProvider"])
                 self.input_name = self.session.get_inputs()[0].name
                 self.output_name = self.session.get_outputs()[0].name
                 self.use_onnx = True
+                self.model_meta = {
+                    "input_name": self.input_name,
+                    "input_shape": [int(d) if isinstance(d, int) else str(d) for d in self.session.get_inputs()[0].shape],
+                    "output_name": self.output_name,
+                    "output_shape": [int(d) if isinstance(d, int) else str(d) for d in self.session.get_outputs()[0].shape],
+                }
                 print(f"[Detector] Successfully loaded ONNX model from {self.model_path}")
             except Exception as e:
                 print(f"[Detector] Failed to load ONNX runtime ({e}). Running in simulation mode.")
                 self.use_onnx = False
         else:
+            print(f"[Detector] Model file not found at {self.model_path}. Running in simulation mode.")
             self.use_onnx = False
+
+    def normalize_class(self, raw_name: str) -> str:
+        """Maps raw training labels to canonical defect names (short -> short_circuit)."""
+        return self.CLASS_ALIASES.get(raw_name, raw_name)
+
+    def get_model_info(self) -> Dict[str, Any]:
+        """Returns deployment metadata for the loaded ONNX model."""
+        return {
+            "model_path": self.model_path,
+            "exists": os.path.exists(self.model_path),
+            "use_onnx": self.use_onnx,
+            "conf_threshold": self.conf_threshold,
+            "class_names": list(self.CLASS_NAMES),
+            "class_aliases": dict(self.CLASS_ALIASES),
+            **self.model_meta,
+        }
 
     def preprocess(self, img: np.ndarray) -> np.ndarray:
         """Applies OpenCV CLAHE contrast enhancement and normalization."""
@@ -105,7 +187,8 @@ class PCBDefectDetector:
                 for idx in indices.flatten():
                     b = boxes[idx]
                     cls_id = class_ids[idx]
-                    cls_name = self.CLASS_NAMES[cls_id] if cls_id < len(self.CLASS_NAMES) else f"defect_{cls_id}"
+                    raw_name = self.CLASS_NAMES[cls_id] if cls_id < len(self.CLASS_NAMES) else f"defect_{cls_id}"
+                    cls_name = self.normalize_class(raw_name)
                     detections.append({
                         "class": cls_name,
                         "bbox": [b[0], b[1], b[0] + b[2], b[1] + b[3]],

@@ -19,7 +19,10 @@ data/sample_images/*.png
 data/sample_images/*.jpg
 models/*.pt
 models/*.onnx
-!models/download_model.py
+!models/yolov8n_pcb_defect.onnx
+!models/training_data.yaml
+!models/confusion_matrix.png
+!models/results.png
 *.sqlite
 *.db
 factory.db
@@ -46,5 +49,4 @@ tasks/
 skill-observations/
 .impeccable/
 .codegraph/
-.env.example
 opencode.json
