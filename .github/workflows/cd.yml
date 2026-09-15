@@ -82,34 +82,3 @@ jobs:
           git remote add space "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}"
           git push --force space main
           echo "Deployed to https://huggingface.co/spaces/${HF_SPACE}"
-
-  notify-discord:
-    # Discord notification on workflow completion. Skipped (ok) if no
-    # webhook secret is configured — pipeline stays green without it.
-    name: Notify Discord on completion
-    runs-on: ubuntu-latest
-    needs: [build-push-image, deploy-hf-space]
-    if: always()
-    steps:
-      - name: Notify Discord
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          NEEDS_JSON: ${{ toJSON(needs) }}
-        run: |
-          set -euo pipefail
-          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
-            echo "No DISCORD_WEBHOOK_URL — skipping notification."
-            exit 0
-          fi
-          # Any non-success job flips the overall status to FAILED.
-          FAILED_JOBS=$(echo "$NEEDS_JSON" | jq -r '[to_entries[] | select(.value.result != "success") | .key] | join(", ")')
-          if [ -z "$FAILED_JOBS" ]; then
-            NOTIFY_STATUS="SUCCESS"
-            COLOR=3066993
-          else
-            NOTIFY_STATUS="FAILED ($FAILED_JOBS)"
-            COLOR=15548997
-          fi
-          TITLE="ApexInspect-AI CD $NOTIFY_STATUS"
-          PAYLOAD=$(jq -n --arg content "**$TITLE** Branch: ${{ github.ref_name }} Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '{content: $content}')
-          curl -sS -X POST -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL"

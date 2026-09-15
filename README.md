@@ -112,7 +112,7 @@ The platform ships with a fully automated **GitHub Actions** pipeline:
 | Workflow | Trigger | Jobs |
 | :--- | :--- | :--- |
 | **CI** (`ci.yml`) | Push / PR → `main` | `pytest` test suite (Python 3.11) • Docker image build smoke test |
-| **CD** (`cd.yml`) | Push → `main` | Build + push Docker image to **GHCR** (`ghcr.io/imtarget05/harness-of-target:latest`) • Deploy to **Hugging Face Space** (optional) • **Discord** notification (optional) |
+| **CD** (`cd.yml`) | Push → `main` | Build + push Docker image to **GHCR** (`ghcr.io/imtarget05/harness-of-target:latest`) • Deploy to **Hugging Face Space** (optional) |
 
 ### Required Secrets & Providers
 
@@ -123,10 +123,9 @@ Configure under **repo → Settings → Secrets and variables → Actions**:
 | `GITHUB_TOKEN` | Secret (auto) | Provided automatically by GitHub Actions | ✅ Automatic |
 | `HF_TOKEN` | Secret | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) → New token (role: `write`) | Only for HF Space auto-deploy |
 | `HF_SPACE` | Variable | Your Space ID, e.g. `imtarget05/apexinspect-ai` | Only for HF Space auto-deploy |
-| `DISCORD_WEBHOOK_URL` | Secret | Discord → Server Settings → Integrations → Webhooks → New Webhook → Copy URL | Only for Discord notifications |
 | `GROQ_API_KEY` | Runtime | [console.groq.com](https://console.groq.com) → set in the HF Space / `.env`, **not** in GitHub | Only when running the app with live LLM |
 
-Both optional jobs skip gracefully (exit 0) when their secrets are not configured, so the pipeline stays green out of the box.
+The optional Hugging Face deploy job skips gracefully (exit 0) when `HF_TOKEN` / `HF_SPACE` are not configured, so the pipeline stays green out of the box.
 
 ## 📂 Project Structure
 
