@@ -211,16 +211,22 @@ class PCBDefectDetector:
         detections = []
         h, w = frame.shape[:2]
 
+        ALLOW_GT = os.getenv("ALLOW_GT_FALLBACK", "false").lower() == "true"
         if self.use_onnx and self.session is not None:
+            from src.vision.quality import check_frame
+            q = check_frame(frame)
+            if not q["ok"]:
+                print(f"[Detector] reject frame: {q['reason']} lap_var={q['laplacian_var']:.1f} bright={q['brightness']:.1f}")
+                latency_ms = (time.perf_counter() - start_time) * 1000.0
+                return self.render_annotations(frame.copy(), [], latency_ms), [], latency_ms
             blob = self.preprocess(frame)
             raw_outputs = self.session.run([self.output_name], {self.input_name: blob})[0]
             detections = self._postprocess_yolov8(raw_outputs, orig_w=w, orig_h=h)
-            # Fallback to ground truth if ONNX base weights haven't been fine-tuned yet
-            if not detections and ground_truth_defects:
+            if not detections and ground_truth_defects and ALLOW_GT:
                 detections = ground_truth_defects
         else:
             time.sleep(0.025)
-            detections = ground_truth_defects or []
+            detections = (ground_truth_defects or []) if ALLOW_GT else []
 
         latency_ms = (time.perf_counter() - start_time) * 1000.0
         annotated_frame = self.render_annotations(frame.copy(), detections, latency_ms)

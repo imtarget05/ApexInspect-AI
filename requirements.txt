@@ -10,6 +10,7 @@ opencv-python-headless>=4.9.0.80
 numpy>=1.26.4
 onnxruntime>=1.17.3
 pillow>=10.3.0
+ultralytics==8.4.153
 
 # Agentic AI & RAG
 langchain-core>=0.2.0
@@ -23,3 +24,6 @@ streamlit>=1.35.0
 plotly>=5.22.0
 requests>=2.31.0
 python-dotenv>=1.0.1
+
+# Ops Scripts (dataset ingest; not needed at runtime)
+kagglehub>=0.3.0

@@ -1,7 +1,7 @@
-path: /content/dataset_pcb
+path: ./dataset_pcb
 train: images/train
 val: images/val
-test: images/val
+test: images/production_val
 
 names:
   0: missing_hole

@@ -25,7 +25,7 @@ def train_custom_pcb_model(epochs: int = 50, batch_size: int = 16, imgsz: int = 
 path: ./dataset_pcb
 train: images/train
 val: images/val
-test: images/val
+test: images/production_val
 
 names:
   0: missing_hole
@@ -48,7 +48,11 @@ names:
         batch=batch_size,
         patience=10,
         project="runs/apex_inspect",
-        name="yolov8n_pcb_custom"
+        name="yolov8n_pcb_custom",
+        device=0,
+        optimizer="AdamW",
+        lr0=0.001,
+        mosaic=1.0,
     )
 
     # 3. Export to ONNX
@@ -56,14 +60,14 @@ names:
     if os.path.exists(best_weights):
         print(f"📦 Exporting trained weights {best_weights} to ONNX format...")
         trained_model = YOLO(best_weights)
-        onnx_file = trained_model.export(format="onnx", imgsz=imgsz, optimize=True)
+        onnx_file = trained_model.export(format="onnx", imgsz=imgsz)
 
         target_dest = os.path.join(os.path.dirname(__file__), "yolov8n_pcb_defect.onnx")
         shutil.copy(onnx_file, target_dest)
         print(f"🎉 Model deployed to target destination: {target_dest}")
     else:
         print("⚠️ best.pt not found, exporting base yolov8n as fallback...")
-        model.export(format="onnx", imgsz=imgsz, optimize=True)
+        model.export(format="onnx", imgsz=imgsz)
 
 if __name__ == "__main__":
     train_custom_pcb_model()

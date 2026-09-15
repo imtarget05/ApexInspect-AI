@@ -24,3 +24,5 @@ Nguon train: Google Colab GPU T4, notebook `notebooks/train_pcb_defect_yolo.ipyn
 - Evidence huan luyen: `models/confusion_matrix.png`, `models/results.png`.
 - Trien khai: file ONNX duoc git track (exception trong `.gitignore`);
   `best.pt` (6 MB) van bi ignore, giu lai trong `notebooks/` de train tiep.
+- Validation: Kaggle val + production_val (images/production_val, tách khỏi train).
+- Fallback GT chỉ khi ALLOW_GT_FALLBACK=true.
