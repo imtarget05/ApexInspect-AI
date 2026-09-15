@@ -2,6 +2,9 @@ import datetime
 from sqlalchemy import Column, String, Float, Boolean, DateTime, Text, JSON
 from .database import Base
 
+def utc_now():
+    return datetime.datetime.now(datetime.timezone.utc)
+
 class ProductionLine(Base):
     """Represents a factory SMT production line."""
     __tablename__ = "production_lines"
@@ -11,7 +14,7 @@ class ProductionLine(Base):
     status = Column(String(20), default="RUNNING") # RUNNING, WARNING, HALTED
     current_product = Column(String(100), nullable=False)
     target_yield_rate = Column(Float, default=95.0)
-    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
 class InspectionLog(Base):
     """Telemetry record for each inspected item passed under the camera."""
@@ -19,7 +22,7 @@ class InspectionLog(Base):
 
     inspection_id = Column(String(64), primary_key=True, index=True)
     line_id = Column(String(50), index=True)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    timestamp = Column(DateTime, default=utc_now, index=True)
     image_filename = Column(String(255), nullable=True)
     is_defective = Column(Boolean, nullable=False, index=True)
     defect_classes = Column(JSON, default=list)        # ['short_circuit', 'mouse_bite']
@@ -40,5 +43,5 @@ class MESTicket(Base):
     action_type = Column(String(50), nullable=False)   # HALT_LINE, ROUTE_REWORK, CALIBRATE
     status = Column(String(20), default="PENDING_APPROVAL") # PENDING_APPROVAL, APPROVED, REJECTED, EXECUTED
     approved_by = Column(String(100), nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
     resolved_at = Column(DateTime, nullable=True)
