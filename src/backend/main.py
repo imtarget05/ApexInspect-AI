@@ -58,36 +58,42 @@ def record_inspection(payload: InspectionCreate, db: Session = Depends(get_db)):
     db.add(log_entry)
     db.commit()
 
-    # Trigger Evaluation: Fetch last 3 inspections
-    recent_3 = db.query(InspectionLog)\
+    # Trigger Evaluation: Fetch recent inspections (up to 30 for sliding window)
+    recent_logs = db.query(InspectionLog)\
         .filter(InspectionLog.line_id == payload.line_id)\
         .order_by(desc(InspectionLog.timestamp))\
-        .limit(3)\
+        .limit(30)\
         .all()
 
     incident_triggered = False
     created_ticket_id = None
 
-    # Condition: 3 consecutive defective items
-    if len(recent_3) == 3 and all(item.is_defective for item in recent_3):
-        # Check if an unresolved ticket already exists
-        existing_pending = db.query(MESTicket)\
-            .filter(MESTicket.line_id == payload.line_id, MESTicket.status == "PENDING_APPROVAL")\
-            .first()
+    # Check if an unresolved ticket already exists
+    existing_pending = db.query(MESTicket)\
+        .filter(MESTicket.line_id == payload.line_id, MESTicket.status == "PENDING_APPROVAL")\
+        .first()
 
-        if not existing_pending:
-            now_utc = get_current_utc()
-            ticket_id = f"TICK-{now_utc.strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
+    if not existing_pending and recent_logs:
+        now_utc = get_current_utc()
+        ticket_id = f"TICK-{now_utc.strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
+
+        # Trigger Condition 1: 3 consecutive defective items
+        recent_3 = recent_logs[:3]
+        consecutive_triggered = len(recent_3) == 3 and all(item.is_defective for item in recent_3)
+
+        # Trigger Condition 2: Yield Rate Drift (error rate > 15% in window of >= 10 items)
+        window_len = len(recent_logs)
+        window_defects = sum(1 for item in recent_logs if item.is_defective)
+        defect_ratio = window_defects / window_len if window_len > 0 else 0.0
+        drift_triggered = window_len >= 10 and defect_ratio > 0.15
+
+        if consecutive_triggered:
             defects_found = payload.defect_classes[0] if payload.defect_classes else "short_circuit"
-
-            # Execute LangGraph Incident Resolution Agent
             agent_result = incident_agent.run(
                 defect_class=defects_found,
                 consecutive_count=3,
                 line_id=payload.line_id
             )
-
-            # Auto-generate MES Incident Ticket from Agent output
             ticket = MESTicket(
                 ticket_id=ticket_id,
                 line_id=payload.line_id,
@@ -96,6 +102,35 @@ def record_inspection(payload: InspectionCreate, db: Session = Depends(get_db)):
                 root_cause_analysis=agent_result.get("rca_analysis", ""),
                 recommended_sop=", ".join(agent_result.get("sop_citations", [])) or "SOP-SMT-001",
                 action_type=agent_result.get("proposed_action", "HALT_LINE"),
+                status="PENDING_APPROVAL",
+                created_at=now_utc
+            )
+            db.add(ticket)
+            db.commit()
+            incident_triggered = True
+            created_ticket_id = ticket_id
+
+        elif drift_triggered:
+            from collections import Counter
+            all_def_types = []
+            for item in recent_logs:
+                if item.is_defective and item.defect_classes:
+                    all_def_types.extend(item.defect_classes)
+            primary_defect = Counter(all_def_types).most_common(1)[0][0] if all_def_types else "defect"
+
+            agent_result = incident_agent.run(
+                defect_class=primary_defect,
+                consecutive_count=window_defects,
+                line_id=payload.line_id
+            )
+            ticket = MESTicket(
+                ticket_id=ticket_id,
+                line_id=payload.line_id,
+                severity="CRITICAL" if defect_ratio > 0.30 else "MEDIUM",
+                trigger_reason=f"Trượt ngưỡng tỷ lệ lỗi (Yield Rate Drift): {defect_ratio*100:.1f}% lỗi ({window_defects}/{window_len}) trong cửa sổ trượt (ngưỡng cho phép: 15%). Lỗi xuất hiện nhiều nhất: '{primary_defect}'.",
+                root_cause_analysis=agent_result.get("rca_analysis", ""),
+                recommended_sop=", ".join(agent_result.get("sop_citations", [])) or "SOP-SMT-001",
+                action_type=agent_result.get("proposed_action", "ROUTE_REWORK"),
                 status="PENDING_APPROVAL",
                 created_at=now_utc
             )

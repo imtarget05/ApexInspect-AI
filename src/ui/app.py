@@ -151,11 +151,33 @@ st.markdown("Giám sát lỗi lắp ráp linh kiện bề mặt thời gian th�
 # Read historical metrics directly from Database
 db = SessionLocal()
 try:
-    db_logs = db.query(InspectionLog).filter_by(line_id="SMT-LINE-01").all()
+    db_logs = db.query(InspectionLog).filter_by(line_id="SMT-LINE-01").order_by(InspectionLog.timestamp.desc()).all()
     display_total = len(db_logs)
     display_defects = sum(1 for log in db_logs if log.is_defective)
+
+    # Compute current streak of consecutive defects from latest DB inspection records
+    db_consecutive = 0
+    for l in db_logs:
+        if l.is_defective:
+            db_consecutive += 1
+        else:
+            break
+
+    # Sliding window for Yield Rate Drift (last 30 items)
+    recent_30 = db_logs[:30]
+    window_len = len(recent_30)
+    window_defects = sum(1 for l in recent_30 if l.is_defective)
+    window_error_rate = (window_defects / window_len * 100.0) if window_len > 0 else 0.0
+    yield_drift_triggered = (window_len >= 10 and window_error_rate > 15.0)
+
+    # Check pending tickets count
+    pending_tickets_count = db.query(MESTicket).filter_by(status="PENDING_APPROVAL").count()
 finally:
     db.close()
+
+# Sync consecutive defects between DB and session
+current_consecutive = max(st.session_state.get("consecutive_defects", 0), db_consecutive)
+st.session_state.consecutive_defects = current_consecutive
 
 yield_rate = ((display_total - display_defects) / max(1, display_total)) * 100.0
 
@@ -165,9 +187,39 @@ with kpi_col1:
 with kpi_col2:
     st.metric("Số lỗi phát hiện (DB)", f"{display_defects:,}", delta=f"{display_defects} vi phạm", delta_color="inverse")
 with kpi_col3:
-    st.metric("Tỷ lệ đạt chuẩn (Yield Rate)", f"{yield_rate:.1f}%", delta=f"{yield_rate - 95.0:.1f}% vs Mục tiêu 95%")
+    if yield_drift_triggered:
+        st.metric(
+            "Tỷ lệ đạt chuẩn (Yield Rate)", 
+            f"{yield_rate:.1f}%", 
+            delta=f"🚨 Trượt ngưỡng ({window_error_rate:.1f}% lỗi > 15%)", 
+            delta_color="inverse"
+        )
+    else:
+        st.metric(
+            "Tỷ lệ đạt chuẩn (Yield Rate)", 
+            f"{yield_rate:.1f}%", 
+            delta=f"{yield_rate - 95.0:.1f}% vs Mục tiêu 95%"
+        )
 with kpi_col4:
-    st.metric("Chuỗi lỗi liên tiếp", f"{st.session_state.consecutive_defects} / 3", delta="Cảnh báo dừng chuyền" if st.session_state.consecutive_defects >= 3 else "Bình thường")
+    if current_consecutive >= 3:
+        consecutive_delta = "🚨 Cảnh báo dừng chuyền"
+    elif pending_tickets_count > 0:
+        consecutive_delta = f"⚠️ {pending_tickets_count} sự cố chờ duyệt"
+    else:
+        consecutive_delta = "Bình thường"
+    st.metric(
+        "Chuỗi lỗi liên tiếp", 
+        f"{current_consecutive} / 3", 
+        delta=consecutive_delta, 
+        delta_color="inverse" if current_consecutive >= 3 or pending_tickets_count > 0 else "normal"
+    )
+
+if yield_drift_triggered or pending_tickets_count > 0:
+    st.warning(
+        f"⚠️ **Cảnh báo chất lượng dây chuyền:** "
+        f"{f'Tỷ lệ lỗi trượt ngưỡng ({window_error_rate:.1f}% > 15%). ' if yield_drift_triggered else ''}"
+        f"{f'Có {pending_tickets_count} phiếu sự cố cần Quản đốc phê duyệt tại Tab 2 (AI Incident & HITL Console).' if pending_tickets_count > 0 else 'AI Agent đang giám sát điều phối.'}"
+    )
 
 st.divider()
 
@@ -253,26 +305,31 @@ with tab_vision:
             finally:
                 db.close()
 
-            # Consecutive defects check
+            # Consecutive defects check & incident trigger evaluation
             if is_def:
                 st.session_state.consecutive_defects += 1
-                def_type = def_classes[0]
-                if st.session_state.consecutive_defects >= 3 and not st.session_state.active_incident:
-                    incident_result = st.session_state.agent.run(
-                        defect_class=def_type,
-                        consecutive_count=st.session_state.consecutive_defects,
-                        line_id="SMT-LINE-01"
-                    )
-                    # Persist ticket
-                    db = SessionLocal()
-                    try:
+            else:
+                st.session_state.consecutive_defects = 0
+
+            db = SessionLocal()
+            try:
+                existing_pending = db.query(MESTicket).filter_by(line_id="SMT-LINE-01", status="PENDING_APPROVAL").first()
+                if not existing_pending:
+                    # Condition 1: 3 consecutive defects
+                    if st.session_state.consecutive_defects >= 3 and not st.session_state.active_incident:
+                        def_type = def_classes[0] if def_classes else "short_circuit"
+                        incident_result = st.session_state.agent.run(
+                            defect_class=def_type,
+                            consecutive_count=st.session_state.consecutive_defects,
+                            line_id="SMT-LINE-01"
+                        )
                         now_utc = datetime.datetime.now(datetime.timezone.utc)
                         ticket_id = f"TICK-{now_utc.strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
                         db.add(MESTicket(
                             ticket_id=ticket_id,
                             line_id="SMT-LINE-01",
                             severity="CRITICAL" if def_type in ["short_circuit", "short"] else "MEDIUM",
-                            trigger_reason=f"Phát hiện 3 sản phẩm liên tiếp có lỗi '{def_type}' trên chuyền SMT-LINE-01.",
+                            trigger_reason=f"Phát hiện {st.session_state.consecutive_defects} sản phẩm liên tiếp có lỗi '{def_type}' trên chuyền SMT-LINE-01.",
                             root_cause_analysis=incident_result.get("rca_analysis", ""),
                             recommended_sop=", ".join(incident_result.get("sop_citations", [])) or "SOP-SMT-001",
                             action_type=incident_result.get("proposed_action", "HALT_LINE"),
@@ -281,11 +338,46 @@ with tab_vision:
                         ))
                         db.commit()
                         incident_result["ticket_id"] = ticket_id
-                    finally:
-                        db.close()
-                    st.session_state.active_incident = incident_result
-            else:
-                st.session_state.consecutive_defects = 0
+                        st.session_state.active_incident = incident_result
+
+                    # Condition 2: Yield Rate Drift (error rate > 15% in window of >= 10 items)
+                    elif not st.session_state.active_incident:
+                        recent_logs_w = db.query(InspectionLog).filter_by(line_id="SMT-LINE-01").order_by(InspectionLog.timestamp.desc()).limit(30).all()
+                        w_len = len(recent_logs_w)
+                        w_defs = sum(1 for l in recent_logs_w if l.is_defective)
+                        w_ratio = w_defs / w_len if w_len > 0 else 0.0
+                        if w_len >= 10 and w_ratio > 0.15:
+                            all_defs = []
+                            for l in recent_logs_w:
+                                if l.is_defective and l.defect_classes:
+                                    all_defs.extend(l.defect_classes if isinstance(l.defect_classes, list) else [l.defect_classes])
+                            from collections import Counter
+                            prim_def = Counter(all_defs).most_common(1)[0][0] if all_defs else "defect"
+                            incident_result = st.session_state.agent.run(
+                                defect_class=prim_def,
+                                consecutive_count=w_defs,
+                                line_id="SMT-LINE-01"
+                            )
+                            now_utc = datetime.datetime.now(datetime.timezone.utc)
+                            ticket_id = f"TICK-{now_utc.strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
+                            db.add(MESTicket(
+                                ticket_id=ticket_id,
+                                line_id="SMT-LINE-01",
+                                severity="CRITICAL" if w_ratio > 0.30 else "MEDIUM",
+                                trigger_reason=f"Trượt ngưỡng tỷ lệ lỗi (Yield Rate Drift): {w_ratio*100:.1f}% lỗi ({w_defs}/{w_len}) trong cửa sổ trượt (ngưỡng cho phép: 15%). Lỗi xuất hiện nhiều nhất: '{prim_def}'.",
+                                root_cause_analysis=incident_result.get("rca_analysis", ""),
+                                recommended_sop=", ".join(incident_result.get("sop_citations", [])) or "SOP-SMT-001",
+                                action_type=incident_result.get("proposed_action", "ROUTE_REWORK"),
+                                status="PENDING_APPROVAL",
+                                created_at=now_utc
+                            ))
+                            db.commit()
+                            incident_result["ticket_id"] = ticket_id
+                            st.session_state.active_incident = incident_result
+            except Exception as e:
+                db.rollback()
+            finally:
+                db.close()
 
         with col_stream:
             if "last_frame" in st.session_state:
@@ -319,8 +411,27 @@ with tab_vision:
                                 consecutive_count=1,
                                 line_id="SMT-LINE-01"
                             )
+                            db = SessionLocal()
+                            try:
+                                now_utc = datetime.datetime.now(datetime.timezone.utc)
+                                ticket_id = f"TICK-{now_utc.strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
+                                db.add(MESTicket(
+                                    ticket_id=ticket_id,
+                                    line_id="SMT-LINE-01",
+                                    severity="CRITICAL" if primary_defect in ["short_circuit", "short"] else "MEDIUM",
+                                    trigger_reason=f"Kích hoạt phân tích sự cố cho lỗi '{primary_defect}' từ ảnh tải lên.",
+                                    root_cause_analysis=incident_res.get("rca_analysis", ""),
+                                    recommended_sop=", ".join(incident_res.get("sop_citations", [])) or "SOP-SMT-001",
+                                    action_type=incident_res.get("proposed_action", "ROUTE_REWORK"),
+                                    status="PENDING_APPROVAL",
+                                    created_at=now_utc
+                                ))
+                                db.commit()
+                                incident_res["ticket_id"] = ticket_id
+                            finally:
+                                db.close()
                             st.session_state.active_incident = incident_res
-                            st.success(f"Đã chuyển sự cố lỗi '{primary_defect}' sang Tab 2 (AI Incident Center)!")
+                            st.success(f"Đã tạo phiếu sự cố cho lỗi '{primary_defect}' và chuyển sang Tab 2 (AI Incident Center)!")
                     else:
                         st.success("✅ **Không phát hiện lỗi trên bo mạch (PASS)**.")
             else:
@@ -368,8 +479,27 @@ with tab_vision:
                         consecutive_count=3,
                         line_id="SMT-LINE-01"
                     )
+                    db = SessionLocal()
+                    try:
+                        now_utc = datetime.datetime.now(datetime.timezone.utc)
+                        ticket_id = f"TICK-{now_utc.strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
+                        db.add(MESTicket(
+                            ticket_id=ticket_id,
+                            line_id="SMT-LINE-01",
+                            severity="CRITICAL" if dets_s[0]["class"] in ["short_circuit", "short"] else "MEDIUM",
+                            trigger_reason=f"Kích hoạt phân tích sự cố mẫu bo mạch lỗi '{dets_s[0]['class']}'.",
+                            root_cause_analysis=incident_res.get("rca_analysis", ""),
+                            recommended_sop=", ".join(incident_res.get("sop_citations", [])) or "SOP-SMT-001",
+                            action_type=incident_res.get("proposed_action", "HALT_LINE"),
+                            status="PENDING_APPROVAL",
+                            created_at=now_utc
+                        ))
+                        db.commit()
+                        incident_res["ticket_id"] = ticket_id
+                    finally:
+                        db.close()
                     st.session_state.active_incident = incident_res
-                    st.success("Đã gửi thông tin sự cố sang Tab 2 (AI Incident Center)!")
+                    st.success("Đã tạo phiếu sự cố và chuyển thông tin sang Tab 2 (AI Incident Center)!")
             else:
                 st.success("Bo mạch đạt chuẩn chất lượng xuất xưởng.")
 
@@ -379,10 +509,77 @@ with tab_vision:
 with tab_agent:
     st.subheader("Trung Tâm Xử Lý Sự Cố & Phê Duyệt Hành Động (Human-in-the-Loop)")
 
-    if st.session_state.active_incident:
+    db = SessionLocal()
+    try:
+        pending_tickets = db.query(MESTicket)\
+            .filter_by(status="PENDING_APPROVAL")\
+            .order_by(MESTicket.created_at.desc())\
+            .all()
+    finally:
+        db.close()
+
+    if pending_tickets:
+        st.error(f"🚨 **PHÁT HIỆN {len(pending_tickets)} PHIẾU SỰ CỐ CẦN QUẢN ĐỐC PHÊ DUYỆT (HUMAN-IN-THE-LOOP)**")
+
+        for tick in pending_tickets:
+            severity_icon = "🔴" if tick.severity == "CRITICAL" else "🟡"
+            with st.container():
+                st.markdown(f"### {severity_icon} Phiếu Sự Cố: `{tick.ticket_id}` — Mức độ: **{tick.severity}**")
+                col_inc1, col_inc2 = st.columns([2, 1])
+                with col_inc1:
+                    st.markdown("#### 🧠 Phân Tích Nguyên Nhân Gốc Rễ (RCA) từ LangGraph Agent:")
+                    st.info(tick.root_cause_analysis or "Đang phân tích...")
+                    st.markdown(f"**Lý do kích hoạt:** {tick.trigger_reason}")
+                    st.markdown(f"**Tài liệu SOP liên quan:** `{tick.recommended_sop}`")
+                    st.caption(f"Dây chuyền: `{tick.line_id}` | Thời gian tạo: `{tick.created_at}`")
+
+                with col_inc2:
+                    st.markdown("#### ⚠️ Đề Xuất Hành Động:")
+                    action_desc = "TẠM DỪNG DÂY CHUYỀN" if tick.action_type == "HALT_LINE" else "ĐIỀU HƯỚNG SANG TRẠM REWORK"
+                    st.warning(f"Lệnh đề xuất: **`{tick.action_type}`** ({action_desc})")
+                    st.caption("Yêu cầu chữ ký xác nhận của Quản đốc ca trước khi hệ thống MES thi hành lệnh.")
+
+                    col_act1, col_act2 = st.columns(2)
+                    with col_act1:
+                        btn_approve_label = "✅ Phê Duyệt Dừng Chuyền" if tick.action_type == "HALT_LINE" else "✅ Phê Duyệt Hành Động"
+                        if st.button(btn_approve_label, key=f"appr_{tick.ticket_id}", type="primary", use_container_width=True):
+                            db = SessionLocal()
+                            try:
+                                t = db.query(MESTicket).filter_by(ticket_id=tick.ticket_id).first()
+                                if t:
+                                    t.status = "APPROVED"
+                                    t.approved_by = "supervisor_on_duty"
+                                    t.resolved_at = datetime.datetime.now(datetime.timezone.utc)
+                                    if t.action_type == "HALT_LINE":
+                                        set_db_line_status("HALTED")
+                                        st.session_state.line_status = "HALTED"
+                                    db.commit()
+                            finally:
+                                db.close()
+                            st.session_state.active_incident = None
+                            st.success(f"ĐÃ THI HÀNH: Phiếu {tick.ticket_id} đã được phê duyệt thành công!")
+                            st.rerun()
+                    with col_act2:
+                        if st.button("❌ Từ Chối / Bỏ Qua", key=f"rej_{tick.ticket_id}", use_container_width=True):
+                            db = SessionLocal()
+                            try:
+                                t = db.query(MESTicket).filter_by(ticket_id=tick.ticket_id).first()
+                                if t:
+                                    t.status = "REJECTED"
+                                    t.approved_by = "supervisor_on_duty"
+                                    t.resolved_at = datetime.datetime.now(datetime.timezone.utc)
+                                    db.commit()
+                            finally:
+                                db.close()
+                            st.session_state.active_incident = None
+                            st.session_state.consecutive_defects = 0
+                            st.info(f"Đã từ chối đề xuất cho phiếu {tick.ticket_id}. Dây chuyền tiếp tục vận hành.")
+                            st.rerun()
+                st.divider()
+
+    elif st.session_state.active_incident:
         inc = st.session_state.active_incident
         st.error(f"🚨 **SỰ CỐ KHẨN CẤP: PHÁT HIỆN {inc.get('consecutive_count', 1)} LỖI '{inc.get('defect_class', 'DEFECT').upper()}'**")
-        
         col_inc1, col_inc2 = st.columns([2, 1])
         with col_inc1:
             st.markdown("### 🧠 Phân Tích Nguyên Nhân Gốc Rễ (RCA) từ LangGraph Agent:")
@@ -390,52 +587,26 @@ with tab_agent:
             st.markdown(f"**Tài liệu SOP liên quan:** `{', '.join(inc.get('sop_citations', []))}`")
             if "ticket_id" in inc:
                 st.caption(f"Mã phiếu MES: `{inc['ticket_id']}`")
-        
         with col_inc2:
             st.markdown("### ⚠️ Đề Xuất Hành Động:")
             st.warning(f"Lệnh đề xuất: **`{inc.get('proposed_action', 'HALT_LINE')}` (TẠM DỪNG DÂY CHUYỀN)**")
             st.caption("Yêu cầu chữ ký xác nhận của Quản đốc ca trước khi hệ thống MES thi hành lệnh dừng chuyền.")
-
             col_act1, col_act2 = st.columns(2)
             with col_act1:
                 if st.button("✅ Phê Duyệt Dừng Chuyền", type="primary", use_container_width=True):
                     set_db_line_status("HALTED")
-                    if "ticket_id" in inc:
-                        db = SessionLocal()
-                        try:
-                            t = db.query(MESTicket).filter_by(ticket_id=inc["ticket_id"]).first()
-                            if t:
-                                t.status = "APPROVED"
-                                t.approved_by = "supervisor_on_duty"
-                                t.resolved_at = datetime.datetime.now(datetime.timezone.utc)
-                                db.commit()
-                        finally:
-                            db.close()
-
                     st.session_state.line_status = "HALTED"
                     st.session_state.active_incident = None
                     st.success("ĐÃ THI HÀNH: Dây chuyền SMT-LINE-01 đã được dừng khẩn cấp an toàn theo SOP-SMT-003!")
                     st.rerun()
             with col_act2:
                 if st.button("❌ Bỏ Qua / Cảnh Báo Lại", use_container_width=True):
-                    if "ticket_id" in inc:
-                        db = SessionLocal()
-                        try:
-                            t = db.query(MESTicket).filter_by(ticket_id=inc["ticket_id"]).first()
-                            if t:
-                                t.status = "REJECTED"
-                                t.approved_by = "supervisor_on_duty"
-                                t.resolved_at = datetime.datetime.now(datetime.timezone.utc)
-                                db.commit()
-                        finally:
-                            db.close()
-
                     st.session_state.active_incident = None
                     st.session_state.consecutive_defects = 0
                     st.info("Đã hủy bỏ đề xuất. Dây chuyền tiếp tục vận hành.")
                     st.rerun()
     else:
-        st.success("✅ **Hệ thống vận hành ổn định.** Chưa có sự cố lặp lại nào vượt ngưỡng cảnh báo.")
+        st.success("✅ **Hệ thống vận hành ổn định.** Chưa có sự cố nào vượt ngưỡng cảnh báo cần phê duyệt.")
 
 # ==========================================
 # TAB 3: ANALYTICS & MES HISTORY

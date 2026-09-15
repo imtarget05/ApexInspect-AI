@@ -82,5 +82,56 @@ class TestBackendPipeline(unittest.TestCase):
         line = self.db.query(ProductionLine).filter_by(line_id="SMT-LINE-01").first()
         self.assertEqual(line.status, "HALTED")
 
+    def test_record_inspection_triggers_incident_on_yield_rate_drift(self):
+        """Alternating defects exceeding 15% defect rate (Yield Rate Drift) must trigger an incident ticket."""
+        line_id = "SMT-LINE-01"
+        # 10 items: 6 PASS, 4 DEFECT (40% defect rate > 15% threshold, never 3 in a row)
+        pattern = [False, True, False, True, False, True, False, True, False, False]
+        last_resp = None
+        for is_def in pattern:
+            payload = InspectionCreate(
+                line_id=line_id,
+                is_defective=is_def,
+                defect_classes=["mouse_bite"] if is_def else [],
+                confidence_scores=[0.85] if is_def else [],
+                bounding_boxes=[[10, 10, 30, 30]] if is_def else [],
+                inference_time_ms=25.0
+            )
+            last_resp = record_inspection(payload, db=self.db)
+
+        # After 10 items with 40% defect rate, yield drift should trigger
+        self.assertTrue(last_resp.incident_triggered)
+        self.assertIsNotNone(last_resp.ticket_id)
+        ticket = self.db.query(MESTicket).filter_by(ticket_id=last_resp.ticket_id).first()
+        self.assertIsNotNone(ticket)
+        self.assertIn("Trượt ngưỡng", ticket.trigger_reason)
+
+    def test_reject_ticket_dismisses_action(self):
+        """Rejecting an incident ticket must update status to REJECTED without halting line."""
+        test_ticket_id = f"TICK-TEST-REJ-{uuid.uuid4().hex[:6]}"
+        ticket = MESTicket(
+            ticket_id=test_ticket_id,
+            line_id="SMT-LINE-01",
+            severity="MEDIUM",
+            trigger_reason="Test reject reason",
+            root_cause_analysis="Test RCA",
+            recommended_sop="SOP-SMT-002",
+            action_type="ROUTE_REWORK",
+            status="PENDING_APPROVAL"
+        )
+        self.db.add(ticket)
+        self.db.commit()
+
+        approval_req = ActionApprovalRequest(
+            ticket_id=test_ticket_id,
+            action="REJECT",
+            approved_by="supervisor_tester"
+        )
+        resp = resolve_ticket(approval_req, db=self.db)
+        self.assertEqual(resp["status"], "DISMISSED")
+
+        db_ticket = self.db.query(MESTicket).filter_by(ticket_id=test_ticket_id).first()
+        self.assertEqual(db_ticket.status, "REJECTED")
+
 if __name__ == "__main__":
     unittest.main()

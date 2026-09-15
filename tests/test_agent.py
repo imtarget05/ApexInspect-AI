@@ -35,5 +35,44 @@ class TestAgentPipeline(unittest.TestCase):
         self.assertIn("SOP-SMT-001", str(result["sop_citations"]))
         self.assertIn("RCA", result["rca_analysis"])
 
+    def test_decoupled_subagents_execution(self):
+        """Verify each sub-agent can be executed independently."""
+        from src.agent.subagents import SOPResearchAgent, RCAAnalysisAgent, InterventionGovernanceAgent
+        from src.agent.graph import QualityIncidentOrchestrator
+
+        sops_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data/sops"))
+        sop_agent = SOPResearchAgent(sops_dir=sops_dir)
+        rca_agent = RCAAnalysisAgent()
+        intervention_agent = InterventionGovernanceAgent()
+
+        state = {
+            "line_id": "SMT-LINE-TEST",
+            "defect_class": "short_circuit",
+            "consecutive_count": 3,
+        }
+
+        # 1. SOP Research Agent
+        res_sop = sop_agent.run(state)
+        self.assertIn("sop_citations", res_sop)
+        self.assertTrue(any("SOP-SMT-001" in c for c in res_sop["sop_citations"]))
+
+        # 2. RCA Analysis Agent
+        state.update(res_sop)
+        res_rca = rca_agent.run(state)
+        self.assertIn("rca_analysis", res_rca)
+        self.assertIn("RCA", res_rca["rca_analysis"])
+
+        # 3. Intervention Governance Agent
+        state.update(res_rca)
+        res_intervention = intervention_agent.run(state)
+        self.assertEqual(res_intervention["proposed_action"], "HALT_LINE")
+        self.assertTrue(res_intervention["requires_hitl"])
+
+        # 4. Orchestrator alias works
+        orchestrator = QualityIncidentOrchestrator(sops_dir=sops_dir)
+        orch_res = orchestrator.run("short_circuit", 3)
+        self.assertEqual(orch_res["proposed_action"], "HALT_LINE")
+
 if __name__ == "__main__":
     unittest.main()
+
