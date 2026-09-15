@@ -10,22 +10,59 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 # Load environment variables from .env
 load_dotenv()
 
-# 1. Read Neon PostgreSQL URL or fallback to SQLite
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-
-if not DATABASE_URL:
-    DATABASE_URL = "sqlite:///./factory.db"
-    connect_args = {"check_same_thread": False}
-    print("[Database] Using Local SQLite Engine: factory.db")
-else:
-    if DATABASE_URL.startswith("postgres://"):
-        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-    connect_args = {}
-    print("[Database] Connected to Remote Managed Database")
-
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+def _sanitize_db_url(url: str) -> str:
+    """Sanitize PostgreSQL URL for maximum driver compatibility."""
+    if not url:
+        return ""
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    # Remove channel_binding parameter which can fail with psycopg2 on some Linux environments
+    if "channel_binding=" in url:
+        import re
+        url = re.sub(r'[?&]channel_binding=[^&]+', '', url)
+        if '?' not in url and '&' in url:
+            url = url.replace('&', '?', 1)
+    return url.strip()
+
+def _init_engine_and_session():
+    """Initializes SQLAlchemy engine with remote Postgres and graceful SQLite fallback."""
+    # 1. Read DATABASE_URL from os.environ or streamlit secrets
+    db_url = os.getenv("DATABASE_URL", "").strip()
+    if not db_url:
+        try:
+            import streamlit as st
+            if hasattr(st, "secrets") and "DATABASE_URL" in st.secrets:
+                db_url = str(st.secrets["DATABASE_URL"]).strip()
+        except Exception:
+            pass
+
+    db_url = _sanitize_db_url(db_url)
+
+    if db_url and db_url.startswith("postgresql"):
+        try:
+            import psycopg2  # noqa: F401
+            eng = create_engine(
+                db_url,
+                pool_pre_ping=True,
+                connect_args={"connect_timeout": 5}
+            )
+            # Lightweight verification ping
+            with eng.connect() as conn:
+                pass
+            print("[Database] Successfully connected to Remote PostgreSQL (Neon)")
+            return eng, sessionmaker(autocommit=False, autoflush=False, bind=eng)
+        except Exception as err:
+            print(f"[Database] Remote PostgreSQL connection failed: {err}. Falling back to SQLite.")
+
+    # Fallback to local SQLite engine
+    sqlite_url = "sqlite:///./factory.db"
+    eng = create_engine(sqlite_url, connect_args={"check_same_thread": False})
+    print("[Database] Using Local SQLite Engine: factory.db")
+    return eng, sessionmaker(autocommit=False, autoflush=False, bind=eng)
+
+engine, SessionLocal = _init_engine_and_session()
 
 def get_db():
     """Dependency for obtaining database sessions."""
@@ -126,7 +163,10 @@ def seed_demo_data(force: bool = False):
 def init_db():
     """Initializes tables and seeds default line configuration."""
     from .models import ProductionLine
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as err:
+        print(f"[Database] Metadata create_all note: {err}")
 
     db = SessionLocal()
     try:

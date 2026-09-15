@@ -13,8 +13,19 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Add project root to sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+# Synchronize Streamlit Secrets into os.environ (Streamlit Community Cloud compatibility)
+try:
+    if hasattr(st, "secrets"):
+        for k, v in st.secrets.items():
+            if isinstance(v, str) and k not in os.environ:
+                os.environ[k] = v
+except Exception:
+    pass
+
+# Ensure project root is in sys.path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from src.vision.simulator import PCBCameraSimulator
 from src.vision.detector import PCBDefectDetector
@@ -23,9 +34,12 @@ from src.agent.rag import SOPRetriever
 from src.backend.database import init_db, seed_demo_data, SessionLocal
 from src.backend.models import ProductionLine, InspectionLog, MESTicket
 
-# Initialize Database and seed demo data if empty
-init_db()
-seed_demo_data(force=False)
+# Safely initialize Database and seed demo data
+try:
+    init_db()
+    seed_demo_data(force=False)
+except Exception as db_init_err:
+    print(f"[App Startup Warning] Database init/seed: {db_init_err}")
 
 st.set_page_config(
     page_title="ApexInspect AI — Smart Factory Quality Platform",
