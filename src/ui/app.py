@@ -237,7 +237,7 @@ tab_vision, tab_agent, tab_analytics, tab_sops = st.tabs([
 with tab_vision:
     mode_choice = st.radio(
         "**Chọn Phương Thức Kiểm Tra Hình Ảnh:**",
-        ["🤖 Băng Chuyền Tự Động (Simulator Stream)", "📁 Tải Ảnh Lên Từ Máy Tính (Upload Image)", "🖼️ Thư Viện Bo Mạch Mẫu (Sample Gallery)"],
+        ["🤖 Băng Chuyền Tự Động (Stream Ảnh Mạch Thật)", "📁 Tải Ảnh Lên Từ Máy Tính (Upload Image)", "🖼️ Thư Viện Bo Mạch Mẫu (Sample Gallery)"],
         horizontal=True
     )
 
@@ -246,9 +246,10 @@ with tab_vision:
     # -------------------------------------------------------------
     # CASE 1: SIMULATOR STREAM
     # -------------------------------------------------------------
-    if mode_choice == "🤖 Băng Chuyền Tự Động (Simulator Stream)":
+    if mode_choice == "🤖 Băng Chuyền Tự Động (Stream Ảnh Mạch Thật)":
         with col_controls:
             st.subheader("Điều Khiển Camera")
+            st.caption("Luồng ảnh: Bo mạch quang học thực tế từ dataset công nghiệp.")
             step_inspect = st.button("📸 Quét Sản Phẩm Tiếp Theo", type="primary", use_container_width=True)
             continuous_run = st.checkbox("Chế độ băng chuyền liên tục", value=False)
             auto_defect_rate = st.slider("Tỷ lệ lỗi ngẫu nhiên (%)", min_value=0, max_value=50, value=15, step=5)
@@ -444,25 +445,28 @@ with tab_vision:
         with col_controls:
             st.subheader("Chọn Mẫu Thử Nghiệm")
             sample_type = st.selectbox(
-                "Danh sách mẫu bo mạch có sẵn:",
+                "Danh sách mẫu bo mạch thực tế (Kaggle Dataset):",
                 [
-                    "1. Bo mạch chuẩn (PASS - Không lỗi)",
-                    "2. Bo mạch lỗi Hàn Chập (Short Circuit)",
-                    "3. Bo mạch lỗi Mất Lỗ Khoan (Missing Hole)",
-                    "4. Bo mạch lỗi Khuyết Mạch Đồng (Mouse Bite)",
-                    "5. Bo mạch lỗi Đứt Mạch (Open Circuit)",
-                    "6. Bo mạch lỗi Râu Đồng (Spur)"
+                    "1. Bo mạch chuẩn (PASS - Ảnh mạch quang học thật)",
+                    "2. Bo mạch lỗi Hàn Chập (Short Circuit - Ảnh mạch thật)",
+                    "3. Bo mạch lỗi Mất Lỗ Khoan (Missing Hole - Ảnh mạch thật)",
+                    "4. Bo mạch lỗi Khuyết Mạch Đồng (Mouse Bite - Ảnh mạch thật)",
+                    "5. Bo mạch lỗi Đứt Mạch (Open Circuit - Ảnh mạch thật)",
+                    "6. Bo mạch lỗi Râu Đồng (Spur - Ảnh mạch thật)",
+                    "7. Bo mạch lỗi Vết Đồng Dư (Spurious Copper - Ảnh mạch thật)"
                 ]
             )
+            st.caption("Nguồn: Ảnh chụp quang học kính hiển vi công nghiệp thực tế từ dataset `akhatova/pcb-defects`.")
             run_sample = st.button("🔍 Quét Mẫu Này", type="primary", use_container_width=True)
 
         defect_map = {
-            "1. Bo mạch chuẩn (PASS - Không lỗi)": (False, None),
-            "2. Bo mạch lỗi Hàn Chập (Short Circuit)": (True, "short_circuit"),
-            "3. Bo mạch lỗi Mất Lỗ Khoan (Missing Hole)": (True, "missing_hole"),
-            "4. Bo mạch lỗi Khuyết Mạch Đồng (Mouse Bite)": (True, "mouse_bite"),
-            "5. Bo mạch lỗi Đứt Mạch (Open Circuit)": (True, "open_circuit"),
-            "6. Bo mạch lỗi Râu Đồng (Spur)": (True, "spur")
+            "1. Bo mạch chuẩn (PASS - Ảnh mạch quang học thật)": (False, None),
+            "2. Bo mạch lỗi Hàn Chập (Short Circuit - Ảnh mạch thật)": (True, "short_circuit"),
+            "3. Bo mạch lỗi Mất Lỗ Khoan (Missing Hole - Ảnh mạch thật)": (True, "missing_hole"),
+            "4. Bo mạch lỗi Khuyết Mạch Đồng (Mouse Bite - Ảnh mạch thật)": (True, "mouse_bite"),
+            "5. Bo mạch lỗi Đứt Mạch (Open Circuit - Ảnh mạch thật)": (True, "open_circuit"),
+            "6. Bo mạch lỗi Râu Đồng (Spur - Ảnh mạch thật)": (True, "spur"),
+            "7. Bo mạch lỗi Vết Đồng Dư (Spurious Copper - Ảnh mạch thật)": (True, "spurious_copper")
         }
 
         with col_stream:

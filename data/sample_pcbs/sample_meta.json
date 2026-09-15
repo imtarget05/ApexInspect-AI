@@ -1,0 +1,434 @@
+{
+  "pass_1.jpg": {
+    "class": "pass",
+    "defects": []
+  },
+  "pass_2.jpg": {
+    "class": "pass",
+    "defects": []
+  },
+  "pass_3.jpg": {
+    "class": "pass",
+    "defects": []
+  },
+  "short_circuit_1.jpg": {
+    "class": "short_circuit",
+    "defects": [
+      {
+        "class": "short_circuit",
+        "bbox": [
+          160.9,
+          458.4,
+          174.7,
+          484.6
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "short_circuit",
+        "bbox": [
+          113.5,
+          377.7,
+          128.3,
+          402.7
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "short_circuit",
+        "bbox": [
+          485.2,
+          444.3,
+          496.8,
+          461.2
+        ],
+        "confidence": 0.9
+      }
+    ]
+  },
+  "short_circuit_2.jpg": {
+    "class": "short_circuit",
+    "defects": [
+      {
+        "class": "short_circuit",
+        "bbox": [
+          213.1,
+          553.2,
+          224.7,
+          572.2
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "short_circuit",
+        "bbox": [
+          540.0,
+          224.4,
+          552.2,
+          240.5
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "short_circuit",
+        "bbox": [
+          316.4,
+          535.1,
+          328.6,
+          554.0
+        ],
+        "confidence": 0.9
+      }
+    ]
+  },
+  "missing_hole_1.jpg": {
+    "class": "missing_hole",
+    "defects": [
+      {
+        "class": "missing_hole",
+        "bbox": [
+          518.7,
+          514.1,
+          533.7,
+          536.3
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "missing_hole",
+        "bbox": [
+          340.3,
+          134.8,
+          354.2,
+          159.8
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "missing_hole",
+        "bbox": [
+          364.1,
+          320.4,
+          379.1,
+          344.6
+        ],
+        "confidence": 0.9
+      }
+    ]
+  },
+  "missing_hole_2.jpg": {
+    "class": "missing_hole",
+    "defects": [
+      {
+        "class": "missing_hole",
+        "bbox": [
+          545.1,
+          93.6,
+          559.0,
+          120.3
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "missing_hole",
+        "bbox": [
+          499.1,
+          324.0,
+          507.5,
+          347.0
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "missing_hole",
+        "bbox": [
+          317.7,
+          323.6,
+          328.9,
+          345.4
+        ],
+        "confidence": 0.9
+      }
+    ]
+  },
+  "mouse_bite_1.jpg": {
+    "class": "mouse_bite",
+    "defects": [
+      {
+        "class": "mouse_bite",
+        "bbox": [
+          320.2,
+          368.4,
+          326.3,
+          386.6
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "mouse_bite",
+        "bbox": [
+          426.1,
+          508.4,
+          431.6,
+          525.4
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "mouse_bite",
+        "bbox": [
+          547.4,
+          358.3,
+          552.7,
+          371.2
+        ],
+        "confidence": 0.9
+      }
+    ]
+  },
+  "mouse_bite_2.jpg": {
+    "class": "mouse_bite",
+    "defects": [
+      {
+        "class": "mouse_bite",
+        "bbox": [
+          321.9,
+          470.1,
+          331.4,
+          487.9
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "mouse_bite",
+        "bbox": [
+          418.7,
+          383.8,
+          426.5,
+          398.7
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "mouse_bite",
+        "bbox": [
+          165.6,
+          417.7,
+          173.8,
+          433.0
+        ],
+        "confidence": 0.9
+      }
+    ]
+  },
+  "open_circuit_1.jpg": {
+    "class": "open_circuit",
+    "defects": [
+      {
+        "class": "open_circuit",
+        "bbox": [
+          324.6,
+          463.7,
+          334.1,
+          486.3
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "open_circuit",
+        "bbox": [
+          225.9,
+          541.5,
+          234.8,
+          556.9
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "open_circuit",
+        "bbox": [
+          355.2,
+          188.4,
+          364.3,
+          203.0
+        ],
+        "confidence": 0.9
+      }
+    ]
+  },
+  "open_circuit_2.jpg": {
+    "class": "open_circuit",
+    "defects": [
+      {
+        "class": "open_circuit",
+        "bbox": [
+          316.8,
+          544.4,
+          324.6,
+          556.1
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "open_circuit",
+        "bbox": [
+          348.7,
+          482.6,
+          355.2,
+          495.9
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "open_circuit",
+        "bbox": [
+          163.5,
+          454.8,
+          170.4,
+          470.1
+        ],
+        "confidence": 0.9
+      }
+    ]
+  },
+  "spur_1.jpg": {
+    "class": "spur",
+    "defects": [
+      {
+        "class": "spur",
+        "bbox": [
+          304.6,
+          453.2,
+          310.9,
+          466.5
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "spur",
+        "bbox": [
+          278.0,
+          509.7,
+          285.4,
+          522.6
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "spur",
+        "bbox": [
+          200.8,
+          521.0,
+          208.2,
+          533.9
+        ],
+        "confidence": 0.9
+      }
+    ]
+  },
+  "spur_2.jpg": {
+    "class": "spur",
+    "defects": [
+      {
+        "class": "spur",
+        "bbox": [
+          161.6,
+          466.5,
+          169.6,
+          483.8
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "spur",
+        "bbox": [
+          151.9,
+          493.9,
+          159.9,
+          508.0
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "spur",
+        "bbox": [
+          173.2,
+          539.5,
+          181.8,
+          555.7
+        ],
+        "confidence": 0.9
+      }
+    ]
+  },
+  "spurious_copper_1.jpg": {
+    "class": "spurious_copper",
+    "defects": [
+      {
+        "class": "spurious_copper",
+        "bbox": [
+          345.7,
+          424.5,
+          360.9,
+          443.9
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "spurious_copper",
+        "bbox": [
+          451.8,
+          453.2,
+          463.9,
+          470.1
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "spurious_copper",
+        "bbox": [
+          165.0,
+          442.3,
+          177.2,
+          464.9
+        ],
+        "confidence": 0.9
+      }
+    ]
+  },
+  "spurious_copper_2.jpg": {
+    "class": "spurious_copper",
+    "defects": [
+      {
+        "class": "spurious_copper",
+        "bbox": [
+          353.3,
+          159.0,
+          365.4,
+          169.1
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "spurious_copper",
+        "bbox": [
+          308.0,
+          468.1,
+          325.1,
+          497.2
+        ],
+        "confidence": 0.9
+      },
+      {
+        "class": "spurious_copper",
+        "bbox": [
+          150.0,
+          440.7,
+          163.5,
+          451.6
+        ],
+        "confidence": 0.9
+      }
+    ]
+  }
+}
