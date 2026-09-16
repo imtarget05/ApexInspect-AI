@@ -33,6 +33,15 @@ class TestBackendPipeline(unittest.TestCase):
         self.assertIsNotNone(line)
         self.assertEqual(line.status, "RUNNING")
 
+    def test_health_endpoint_returns_ok(self):
+        """GET /health must return liveness payload for Docker HEALTHCHECK & smoke tests."""
+        from src.backend.main import health_check
+
+        result = health_check()
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["service"], "apexinspect-gateway")
+        self.assertIn("version", result)
+
     def test_record_inspection_triggers_incident_on_three_defects(self):
         """Posting 3 consecutive defects must trigger an incident ticket."""
         line_id = "SMT-LINE-01"

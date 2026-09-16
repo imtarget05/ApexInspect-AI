@@ -34,6 +34,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/health")
+def health_check():
+    """Liveness probe for Docker HEALTHCHECK (Space API) and post-deploy smoke tests."""
+    return {"status": "ok", "service": "apexinspect-gateway", "version": app.version}
+
 from .service import InspectionService
 from .models import ProductionLine, InspectionLog, MESTicket, AuditLog
 
