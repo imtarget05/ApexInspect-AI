@@ -166,6 +166,27 @@ def seed_demo_data(force: bool = False):
     finally:
         db.close()
 
+def _ensure_thread_id_column(target_engine) -> None:
+    """Cross-engine migration: adds mes_tickets.thread_id when missing.
+
+    Replaces the old SQLite-only PRAGMA migration so that PostgreSQL databases
+    (Neon) created before the thread_id column was introduced are migrated too.
+    """
+    from sqlalchemy import inspect
+
+    try:
+        inspector = inspect(target_engine)
+        cols = [c["name"] for c in inspector.get_columns("mes_tickets")]
+        if "thread_id" not in cols:
+            with target_engine.connect() as conn:
+                conn.exec_driver_sql(
+                    "ALTER TABLE mes_tickets ADD COLUMN thread_id VARCHAR(100);"
+                )
+                conn.commit()
+            print("[Database] Migrated: added mes_tickets.thread_id column")
+    except Exception as mig_err:
+        print(f"[Database] thread_id migration note: {mig_err}")
+
 def init_db():
     """Initializes tables, ensures schema migrations, and seeds default line configuration."""
     from .models import ProductionLine
@@ -174,16 +195,8 @@ def init_db():
     except Exception as err:
         print(f"[Database] Metadata create_all note: {err}")
 
-    # Seamless SQLite schema migrations for existing local databases
-    try:
-        with engine.connect() as conn:
-            res = conn.exec_driver_sql("PRAGMA table_info(mes_tickets);")
-            cols = [row[1] for row in res.fetchall()]
-            if cols and "thread_id" not in cols:
-                conn.exec_driver_sql("ALTER TABLE mes_tickets ADD COLUMN thread_id VARCHAR(100);")
-                conn.commit()
-    except Exception as mig_err:
-        pass
+    # Cross-engine schema migration (SQLite AND PostgreSQL/Neon)
+    _ensure_thread_id_column(engine)
 
     db = SessionLocal()
     try:

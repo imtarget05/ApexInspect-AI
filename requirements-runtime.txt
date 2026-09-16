@@ -1,0 +1,34 @@
+# Core runtime dependencies for the deployed container (HF Spaces UI + API).
+# Deliberately EXCLUDES training-only deps:
+#   - ultralytics (pulls torch + CUDA wheels ~12GB; used only in models/train.py & Colab notebook)
+#   - kagglehub   (only used by ops scripts/scripts/ingest_pcb_dataset.py)
+# Runtime inference uses ONNX Runtime directly (src/vision/detector.py).
+
+# Core Framework & Backend
+fastapi>=0.110.0
+uvicorn>=0.29.0
+pydantic>=2.7.0
+sqlalchemy>=2.0.29
+psycopg2-binary>=2.9.9
+
+# Industrial OT & PLC Control
+pymodbus>=3.8.0
+
+# Computer Vision & Machine Learning
+opencv-python-headless>=4.9.0.80
+numpy>=1.26.4
+onnxruntime>=1.17.3
+pillow>=10.3.0
+
+# Agentic AI & RAG
+langchain-core>=0.2.0
+langgraph>=0.2.0
+langchain-groq>=0.1.3
+chromadb>=0.5.0
+rank-bm25>=0.2.2
+
+# Presentation & UI
+streamlit>=1.35.0
+plotly>=5.22.0
+requests>=2.31.0
+python-dotenv>=1.0.1

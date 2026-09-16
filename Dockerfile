@@ -13,12 +13,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create non-root user for security (SDC best practice)
 RUN groupadd -r apexinspect && useradd -r -g apexinspect -d /app -s /sbin/nologin apexinspect
 
-# Copy and install python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy and install python dependencies (runtime-only; training deps excluded — see requirements-runtime.txt)
+COPY requirements-runtime.txt ./
+RUN pip install --no-cache-dir -r requirements-runtime.txt
 
 # Copy project code
 COPY --chown=apexinspect:apexinspect . .
+
+# /app directory itself must be writable by the non-root user
+# (SQLite fallback needs to create journal/WAL files next to the DB at runtime)
+RUN chown apexinspect:apexinspect /app
 
 # Switch to non-root user
 USER apexinspect

@@ -1,0 +1,30 @@
+# Local dev & secrets — NEVER bake into the image
+.env
+.env.local
+
+# VCS & tooling
+.git
+.github
+.kilo
+.codegraph
+.pytest_cache
+__pycache__
+**/__pycache__
+*.pyc
+
+# Throwaway / local artifacts
+*.db
+factory_test.db
+
+# Docs, plans, notebooks, tests — not needed at runtime
+docs
+plans
+tasks
+tests
+notebooks
+*.md
+!README.md
+
+# Ops scripts (dataset ingest, gallery rebuild) — not part of the container runtime
+scripts
+deploy/terraform

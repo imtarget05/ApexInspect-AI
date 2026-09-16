@@ -42,6 +42,37 @@ class TestBackendPipeline(unittest.TestCase):
         self.assertEqual(result["service"], "apexinspect-gateway")
         self.assertIn("version", result)
 
+    def test_ensure_thread_id_column_adds_when_missing(self):
+        """Migration helper must add missing mes_tickets.thread_id on any engine (Postgres parity)."""
+        import os
+
+        from sqlalchemy import create_engine
+
+        from src.backend import database as dbmod
+
+        test_db_path = os.path.join(os.path.dirname(__file__), "_mig_test.db")
+        eng = create_engine(
+            f"sqlite:///{test_db_path}",
+            connect_args={"check_same_thread": False},
+        )
+        try:
+            # Simulate an OLD database created before thread_id existed
+            dbmod.Base.metadata.create_all(bind=eng)
+            with eng.connect() as conn:
+                conn.exec_driver_sql("ALTER TABLE mes_tickets DROP COLUMN thread_id;")
+                conn.commit()
+
+            dbmod._ensure_thread_id_column(eng)
+
+            with eng.connect() as conn:
+                res = conn.exec_driver_sql("PRAGMA table_info(mes_tickets);")
+                cols = [row[1] for row in res.fetchall()]
+            self.assertIn("thread_id", cols)
+        finally:
+            eng.dispose()
+            if os.path.exists(test_db_path):
+                os.remove(test_db_path)
+
     def test_record_inspection_triggers_incident_on_three_defects(self):
         """Posting 3 consecutive defects must trigger an incident ticket."""
         line_id = "SMT-LINE-01"
