@@ -18,15 +18,15 @@ class TestVisionPipeline(unittest.TestCase):
         self.detector = PCBDefectDetector()
         # Warmup: first ONNX run includes one-time costs (memory arena,
         # graph init). Benchmarks must measure steady-state latency.
-        # Warmup must go through the gated path: well-exposed frame
-        # (simulator raw ~56 brightness is underexposed vs gate 60-200)
-        # + ALLOW_GT_FALLBACK=true so synthetic frames exercise ONNX.
+        # Uses the raw simulator frame (mean brightness ~56) so the warmup
+        # exercises the same production quality gate as the benchmark itself.
+        # ALLOW_GT_FALLBACK=true so synthetic frames exercise the ONNX path
+        # even when the network finds nothing on cartoon imagery.
         try:
             prev_gt = os.getenv("ALLOW_GT_FALLBACK")
             os.environ["ALLOW_GT_FALLBACK"] = "true"
             try:
                 warm_frame, warm_gt = self.simulator.generate_pcb_frame(inject_defect=True, specific_defect="short_circuit")
-                warm_frame = cv2.add(warm_frame, np.full(warm_frame.shape, 30, dtype=np.uint8))
                 self.detector.infer(warm_frame, warm_gt)
             finally:
                 if prev_gt is None:
@@ -55,17 +55,16 @@ class TestVisionPipeline(unittest.TestCase):
 
     def test_detector_inference_latency_under_threshold(self):
         """Detector must run inference and return annotated frame with steady-state latency <= 120ms."""
-        # Production-gated path: raw simulator frames (~56 brightness) are
-        # underexposed vs the quality gate (60-200) and are correctly
-        # rejected. Latency benchmark therefore uses a well-exposed frame
-        # (+30 exposure compensation -> ~86 brightness, still sharp) with
-        # ALLOW_GT_FALLBACK=true (demo/synthetic fallback) so the synthetic
-        # defect is returned when ONNX finds nothing on synthetic imagery.
+        # Production-gated path: the raw simulator frame (mean brightness ~56,
+        # matching real PCB camera exposure) is accepted by the quality gate,
+        # so the benchmark measures the same path production uses. No exposure
+        # compensation is applied. ALLOW_GT_FALLBACK=true (demo/synthetic
+        # fallback) returns the synthetic defect when ONNX finds nothing on
+        # cartoon imagery.
         prev_gt = os.getenv("ALLOW_GT_FALLBACK")
         os.environ["ALLOW_GT_FALLBACK"] = "true"
         self.addCleanup(lambda: (os.environ.__setitem__("ALLOW_GT_FALLBACK", prev_gt) if prev_gt is not None else os.environ.pop("ALLOW_GT_FALLBACK", None)))
         frame, ground_truth = self.simulator.generate_pcb_frame(inject_defect=True, specific_defect="short_circuit")
-        frame = cv2.add(frame, np.full(frame.shape, 30, dtype=np.uint8))
         latencies = []
         detections = []
         annotated_frame = None
@@ -97,6 +96,18 @@ class TestVisionPipeline(unittest.TestCase):
         """Raw training label 'short' (data.yaml) must map to canonical 'short_circuit'."""
         self.assertEqual(self.detector.normalize_class("short"), "short_circuit")
         self.assertEqual(self.detector.normalize_class("spur"), "spur")
+
+    def test_detector_letterbox_preserves_aspect_ratio_and_pads_grey(self):
+        """Letterbox must maintain aspect ratio and pad with 114 grey without stretching."""
+        # Non-square rectangular image (e.g. 1000 x 2000)
+        img = np.zeros((1000, 2000, 3), dtype=np.uint8)
+        boxed, r, (dw, dh) = self.detector.letterbox(img, (640, 640), color=(114, 114, 114))
+        self.assertEqual(boxed.shape, (640, 640, 3))
+        self.assertAlmostEqual(r, 640 / 2000.0)
+        self.assertEqual(dw, 0.0)
+        self.assertAlmostEqual(dh, (640 - 320) / 2.0)
+        # Verify padding borders have color 114
+        self.assertEqual(int(boxed[0, 320, 0]), 114)
 
 
 def test_infer_does_not_fake_gt_in_production(monkeypatch):

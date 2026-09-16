@@ -73,6 +73,46 @@ class TestAgentPipeline(unittest.TestCase):
         orch_res = orchestrator.run("short_circuit", 3)
         self.assertEqual(orch_res["proposed_action"], "HALT_LINE")
 
+    def test_agent_hitl_interrupt_and_resume(self):
+        """Verify that agent pauses at interrupt() and resumes with supervisor sign-off."""
+        thread_id = "test-hitl-thread-42"
+        paused_state = self.agent.run(
+            defect_class="short_circuit",
+            consecutive_count=3,
+            line_id="SMT-LINE-01",
+            thread_id=thread_id
+        )
+        self.assertEqual(paused_state["proposed_action"], "HALT_LINE")
+        self.assertTrue(paused_state["requires_hitl"])
+        self.assertIn("__interrupt__", paused_state)
+
+        # Resume with Supervisor Approval
+        resumed_state = self.agent.resume_approval(
+            thread_id=thread_id,
+            approved=True,
+            supervisor_id="lead_qa_engineer"
+        )
+        self.assertEqual(resumed_state["approval_status"], "APPROVED")
+        self.assertEqual(resumed_state["approved_by"], "lead_qa_engineer")
+        self.assertIn("EXECUTED", resumed_state["execution_result"])
+
+    def test_sop_search_ipc610_and_nozzle_maintenance(self):
+        """BM25 search must correctly retrieve new IPC-A-610, reflow drift, and nozzle maintenance SOPs."""
+        # 1. IPC Class 3
+        res_ipc = self.retriever.search("IPC Class 3 solder fillet", top_k=1)
+        self.assertGreater(len(res_ipc), 0)
+        self.assertIn("SOP-SMT-004", res_ipc[0]["sop_id"])
+
+        # 2. Reflow profile drift
+        res_reflow = self.retriever.search("reflow profile drift TAL thermocouple", top_k=1)
+        self.assertGreater(len(res_reflow), 0)
+        self.assertIn("SOP-SMT-005", res_reflow[0]["sop_id"])
+
+        # 3. Nozzle maintenance
+        res_nozzle = self.retriever.search("vacuum nozzle ultrasonic cleaning", top_k=1)
+        self.assertGreater(len(res_nozzle), 0)
+        self.assertIn("SOP-SMT-006", res_nozzle[0]["sop_id"])
+
 if __name__ == "__main__":
     unittest.main()
 

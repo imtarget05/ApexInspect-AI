@@ -1,0 +1,7 @@
+# Copy this file to terraform.tfvars and fill in your actual values
+resource_group_name  = "rg-portfolio-prod"
+location             = "southeastasia"
+environment          = "production"
+prefix               = "apex"
+image_tag            = "latest"
+groq_api_key         = "gsk_your_actual_groq_api_key_here"

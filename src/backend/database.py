@@ -40,6 +40,12 @@ def _init_engine_and_session():
 
     db_url = _sanitize_db_url(db_url)
 
+    # Explicit SQLite URL (tests use a throwaway file via tests/conftest.py).
+    if db_url and db_url.startswith("sqlite"):
+        eng = create_engine(db_url, connect_args={"check_same_thread": False})
+        print(f"[Database] Using SQLite Engine: {db_url.replace('sqlite:///', '')}")
+        return eng, sessionmaker(autocommit=False, autoflush=False, bind=eng)
+
     if db_url and db_url.startswith("postgresql"):
         try:
             import psycopg2  # noqa: F401
@@ -161,12 +167,23 @@ def seed_demo_data(force: bool = False):
         db.close()
 
 def init_db():
-    """Initializes tables and seeds default line configuration."""
+    """Initializes tables, ensures schema migrations, and seeds default line configuration."""
     from .models import ProductionLine
     try:
         Base.metadata.create_all(bind=engine)
     except Exception as err:
         print(f"[Database] Metadata create_all note: {err}")
+
+    # Seamless SQLite schema migrations for existing local databases
+    try:
+        with engine.connect() as conn:
+            res = conn.exec_driver_sql("PRAGMA table_info(mes_tickets);")
+            cols = [row[1] for row in res.fetchall()]
+            if cols and "thread_id" not in cols:
+                conn.exec_driver_sql("ALTER TABLE mes_tickets ADD COLUMN thread_id VARCHAR(100);")
+                conn.commit()
+    except Exception as mig_err:
+        pass
 
     db = SessionLocal()
     try:

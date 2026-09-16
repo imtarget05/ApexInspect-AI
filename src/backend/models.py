@@ -43,5 +43,20 @@ class MESTicket(Base):
     action_type = Column(String(50), nullable=False)   # HALT_LINE, ROUTE_REWORK, CALIBRATE
     status = Column(String(20), default="PENDING_APPROVAL") # PENDING_APPROVAL, APPROVED, REJECTED, EXECUTED
     approved_by = Column(String(100), nullable=True)
+    thread_id = Column(String(100), nullable=True)     # LangGraph checkpoint thread identifier
     created_at = Column(DateTime, default=utc_now)
     resolved_at = Column(DateTime, nullable=True)
+
+class AuditLog(Base):
+    """Immutable audit trail for industrial safety decisions and line control actions."""
+    __tablename__ = "audit_logs"
+
+    log_id = Column(String(64), primary_key=True, index=True)
+    timestamp = Column(DateTime, default=utc_now, index=True)
+    operator_id = Column(String(100), nullable=False)
+    action = Column(String(50), nullable=False)       # APPROVE_HALT, REJECT_HALT, RESUME_LINE, PLC_DISPATCH
+    line_id = Column(String(50), nullable=False)
+    ticket_id = Column(String(64), nullable=True)
+    details = Column(Text, nullable=True)
+    source_ip = Column(String(50), nullable=True)
+

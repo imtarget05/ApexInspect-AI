@@ -55,6 +55,29 @@ $$\text{Camera Stream (OpenCV)} \longrightarrow \text{ONNX Defect Detection} \lo
   - Cập nhật trạng thái dây chuyền (`RUNNING` $\leftrightarrow$ `HALTED`).
   - Tự động tạo `Maintenance Ticket` với đầy đủ mã lỗi, ảnh chụp vi phạm và khuyến nghị SOP.
 
+### FR-6: Industrial OT Actuation & Modbus TCP PLC Bridge
+- Kết nối hai chiều với bộ điều khiển PLC công nghiệp (Siemens S7-1200 / Omron NX1P2 / Beckhoff) qua giao thức chuẩn **Modbus TCP**:
+  - Ghi Coils kích hoạt ngắt nguồn băng tải khẩn cấp (`COIL_HALT_LINE`).
+  - Kích hoạt pít-tông khí nén gạt sản phẩm lỗi sang khay rework (`COIL_REWORK_DIVERT`).
+  - Điều khiển đèn tháp tín hiệu Andon 3 màu (`TOWER_LIGHT_RED`, `TOWER_LIGHT_YELLOW`, `TOWER_LIGHT_GREEN`).
+  - Đồng bộ sản lượng và tỷ lệ lỗi vào các thanh ghi Holding Registers phục vụ hệ thống SCADA.
+  - Tích hợp máy chủ giả lập ảo (`VirtualModbusServer`) cho môi trường dev/test không cần phần cứng vật lý.
+
+### FR-7: High-Resolution Sliced Inference (SAHI Patching)
+- Cung cấp module `HighResPatchInferencer` chia nhỏ ảnh độ phân giải siêu cao (2048x2048, 4096x4096) thành các lát cắt gối đầu (sliding patches với overlap ratio 20%).
+- Khử trùng lặp đa vùng bằng Non-Maximum Suppression (NMS) toàn cục, chống bỏ sót các lỗi kích thước hiển vi (chân hàn chập sợi tóc, khuyết đồng mouse bite 10-15px).
+
+### FR-8: Resilient Threaded Industrial Camera Stream Ingestion
+- Bộ thu hình đa luồng (`IndustrialCameraStream`) tương thích luồng RTSP từ camera công nghiệp GigE/USB3 Vision.
+- Cơ chế xả đệm thông minh (zero-lag latest frame drop policy) đảm bảo độ trễ thời gian thực.
+- Tự động kiểm tra chất lượng hình ảnh (độ mờ nét Laplacian variance, thiếu sáng, quá sáng) và tự động kết nối lại khi đứt cáp mạng.
+
+### FR-9: IPC-A-610 Class 3 & SMT Standard Operating Procedures
+- Bổ sung bộ tài liệu quy chuẩn kỹ thuật quốc tế:
+  - `SOP-SMT-004`: Tiêu chuẩn nghiệm thu mối hàn theo IPC-A-610 Class 3.
+  - `SOP-SMT-005`: Kiểm soát và hiệu chuẩn lệch đường cong nhiệt độ lò hàn hồi lưu (Reflow Profile Drift / PWI / TAL).
+  - `SOP-SMT-006`: Quy trình vệ sinh siêu âm và bảo trì đầu hút chân không máy gắp linh kiện (SMD Nozzle Maintenance).
+
 ---
 
 ## 4. Free Infrastructure Deployment Architecture (Zero-Cost Stack)
@@ -64,7 +87,7 @@ Toàn bộ hệ thống được tối ưu hóa để triển khai **hoàn toàn
 | Thành phần | Dịch vụ Miễn phí | Thông số kỹ thuật | Vai trò trong hệ thống |
 | :--- | :--- | :--- | :--- |
 | **Model Serving & Web UI** | **Hugging Face Spaces** | 2 vCPU, 16 GB RAM, Docker SDK | Chạy trọn gói Streamlit Dashboard, OpenCV, ONNX Runtime CPU và FastAPI Gateway. |
-| **Managed Database** | **Neon PostgreSQL** | 0.5 GB Storage, Serverless Postgres | Lưu trữ bảng dữ liệu kiểm định, trạng thái dây chuyền và ticket MES. |
+| **Managed Database** | **Neon PostgreSQL** | 0.5 GB Storage, Serverless Postgres | Lưu trữ bảng dữ liệu kiểm định, trạng thái dây chuyền, audit log và ticket MES. |
 | **LLM Inference** | **Groq API** | Llama 3.3 70B, 30 req/min free | Bộ não Agent phân tích nguyên nhân sự cố và tổng hợp SOP tốc độ ~300 tokens/s. |
 | **Model Weight Storage** | **GitHub Releases / Git LFS** | Băng thông miễn phí | Lưu file trọng số `yolov8n_pcb_defect.onnx` (<15 MB). |
 
@@ -73,4 +96,6 @@ Toàn bộ hệ thống được tối ưu hóa để triển khai **hoàn toàn
 ## 5. Non-Functional Requirements (NFR)
 1. **Performance**: Thông lượng xử lý hình ảnh trên CPU $\ge 25\text{ FPS}$ (phù hợp với tốc độ băng tải sản xuất tiêu chuẩn).
 2. **Reliability & Fallback**: Nếu mất kết nối Neon PostgreSQL, hệ thống tự động chuyển sang lưu tạm thời trên SQLite cục bộ (`factory.db`). Nếu mất kết nối Groq API, Agent chuyển sang chế độ template quy trình offline.
-3. **Auditability**: Mọi hành động dừng chuyền hoặc điều chỉnh thiết bị đều phải lưu vết người duyệt (`approved_by`) và mốc thời gian (`timestamp`).
+3. **Auditability & Traceability**: Bảng kiểm toán `audit_logs` lưu trữ mọi hành động can thiệp, phân luồng sự cố, IP nguồn và chữ ký số Quản đốc ca.
+4. **Security**: Bảo vệ cổng điều khiển tác vụ sản xuất MES với tiêu chuẩn xác thực mã khóa `X-API-KEY`.
+5. **Testing**: Độ bao phủ kiểm thử toàn diện 100% với 61 test cases bao quát toàn bộ Vision, Agent HITL, Database, Modbus PLC, Patching và Camera Stream.

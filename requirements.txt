@@ -5,6 +5,9 @@ pydantic>=2.7.0
 sqlalchemy>=2.0.29
 psycopg2-binary>=2.9.9
 
+# Industrial OT & PLC Control
+pymodbus>=3.8.0
+
 # Computer Vision & Machine Learning
 opencv-python-headless>=4.9.0.80
 numpy>=1.26.4

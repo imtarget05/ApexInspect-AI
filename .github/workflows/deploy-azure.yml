@@ -1,0 +1,54 @@
+name: Deploy to Azure Container Apps
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - 'src/**'
+      - 'data/**'
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - '.github/workflows/deploy-azure.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  test-and-deploy:
+    name: Test & Deploy to Azure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies & pytest
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run Test Suite
+        run: PYTHONPATH=. pytest tests/ -q --tb=short
+
+      - name: Log in to Azure (using AZURE_CREDENTIALS secret)
+        uses: azure/login@v2
+        if: env.AZURE_CREDENTIALS != ''
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Build & Deploy via Azure CLI
+        if: env.AZURE_CREDENTIALS != ''
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          chmod +x deploy/deploy-azure.sh
+          ./deploy/deploy-azure.sh

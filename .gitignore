@@ -17,6 +17,8 @@ venv/
 # Data & Model Weights
 data/sample_images/*.png
 data/sample_images/*.jpg
+dataset_pcb/
+models/dataset_pcb/
 models/*.pt
 models/*.onnx
 !models/yolov8n_pcb_defect.onnx
@@ -51,7 +53,7 @@ skill-observations/
 .codegraph/
 opencode.json
 
-# Colab export duplicates (canonical weights live in models/; keep local-only)
+# Colab export duplicates (canonical artifacts live in models/; notebooks/ holds only the .ipynb)
 notebooks/best.onnx
 notebooks/best.pt
 notebooks/confusion_matrix.png

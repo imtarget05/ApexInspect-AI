@@ -27,4 +27,6 @@ ENV STREAMLIT_SERVER_HEADLESS=true
 ENV STREAMLIT_SERVER_ENABLE_CORS=false
 ENV STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false
 
-CMD ["streamlit", "run", "src/ui/app.py"]
+# Support dynamic port binding for Azure Container Apps / Hugging Face
+CMD ["sh", "-c", "streamlit run src/ui/app.py --server.port=${PORT:-7860} --server.address=0.0.0.0"]
+

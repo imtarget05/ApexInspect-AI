@@ -32,7 +32,9 @@ from src.vision.detector import PCBDefectDetector
 from src.agent.graph import QualityIncidentAgent
 from src.agent.rag import SOPRetriever
 from src.backend.database import init_db, seed_demo_data, SessionLocal
-from src.backend.models import ProductionLine, InspectionLog, MESTicket
+from src.backend.models import ProductionLine, InspectionLog, MESTicket, AuditLog
+from src.backend.service import InspectionService
+from src.backend.schemas import InspectionCreate
 
 # Safely initialize Database and seed demo data
 try:
@@ -48,29 +50,110 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for Industrial High-Tech Look
+# Custom CSS for Industrial High-Tech Look (Enterprise SCADA / MES Dark Theme)
 st.markdown("""
 <style>
-    .metric-box {
-        background-color: #1e222d;
-        border-radius: 8px;
-        padding: 14px;
-        border-left: 5px solid #00c853;
-        margin-bottom: 10px;
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    .metric-box-alert {
-        background-color: #2d1e1e;
-        border-radius: 8px;
-        padding: 14px;
-        border-left: 5px solid #ff3d00;
-        margin-bottom: 10px;
+    
+    code, pre, .telemetry-mono {
+        font-family: 'JetBrains Mono', monospace !important;
     }
-    .stButton>button {
-        border-radius: 6px;
+    
+    /* Modern Dashboard Header Banner */
+    .scada-header {
+        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        border: 1px solid #334155;
+        border-radius: 12px;
+        padding: 20px 24px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+    }
+    
+    /* Pulse status badges */
+    .status-pulse-running {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background-color: #10b981;
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+        animation: pulse-green 2s infinite;
+        margin-right: 8px;
+    }
+    
+    .status-pulse-halted {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background-color: #ef4444;
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+        animation: pulse-red 1.5s infinite;
+        margin-right: 8px;
+    }
+    
+    @keyframes pulse-green {
+        0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+        70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+    
+    @keyframes pulse-red {
+        0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+        70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+    }
+    
+    /* Polished Metric & Incident Cards */
+    div[data-testid="stMetric"] {
+        background: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 10px;
+        padding: 12px 16px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    }
+    
+    div[data-testid="stMetricLabel"] {
+        color: #94a3b8 !important;
         font-weight: 600;
+        font-size: 13px;
+    }
+    
+    div[data-testid="stMetricValue"] {
+        color: #f8fafc !important;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 700;
+        font-size: 24px;
+    }
+    
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background-color: transparent;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px;
+        padding: 8px 16px;
+        font-weight: 600;
+    }
+    
+    .stButton>button {
+        border-radius: 8px;
+        font-weight: 600;
+        transition: all 0.2s ease;
+    }
+    
+    .stButton>button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
     }
 </style>
 """, unsafe_allow_html=True)
+
 
 # Helper function to get current DB line status
 def get_db_line_status(line_id: str = "SMT-LINE-01") -> str:
@@ -128,11 +211,15 @@ with st.sidebar:
 
     if st.session_state.line_status == "HALTED":
         if st.button("🔄 Khởi Động Lại Dây Chuyền (Resume)", type="primary"):
-            set_db_line_status("RUNNING")
+            db = SessionLocal()
+            try:
+                InspectionService.resume_line(db=db, line_id="SMT-LINE-01", operator_id="supervisor_ui", source_ip="streamlit_ui")
+            finally:
+                db.close()
             st.session_state.line_status = "RUNNING"
             st.session_state.consecutive_defects = 0
             st.session_state.active_incident = None
-            st.success("Dây chuyền SMT-LINE-01 đã khởi động lại an toàn!")
+            st.success("Dây chuyền SMT-LINE-01 đã khởi động lại an toàn qua InspectionService!")
             st.rerun()
 
     st.divider()
@@ -144,9 +231,37 @@ with st.sidebar:
     st.markdown(f"- **Agent LLM**: `{st.session_state.agent.model_name}`")
     st.markdown("- **Storage**: `Neon PostgreSQL`")
 
-# Header & Global KPI Metrics
-st.title("Trung Tâm Điều Hành Chất Lượng & Thị Giác Máy Tính")
-st.markdown("Giám sát lỗi lắp ráp linh kiện bề mặt thời gian thực & Điều phối sự cố thông minh qua AI Agent.")
+# Header & Global KPI Metrics (Industrial SCADA Topbar)
+status_pulse_class = "status-pulse-running" if st.session_state.line_status == "RUNNING" else "status-pulse-halted"
+status_text = "DÂY CHUYỀN HOẠT ĐỘNG BÌNH THƯỜNG" if st.session_state.line_status == "RUNNING" else "DÂY CHUYỀN ĐANG TẠM DỪNG (HALTED)"
+status_text_color = "#10b981" if st.session_state.line_status == "RUNNING" else "#ef4444"
+
+st.markdown(f"""
+<div class="scada-header">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="{status_pulse_class}"></span>
+                <span style="font-size: 11px; font-weight: 700; color: {status_text_color}; letter-spacing: 0.08em; font-family: 'JetBrains Mono', monospace;">
+                    {status_text}
+                </span>
+            </div>
+            <h1 style="margin: 6px 0 2px 0; font-size: 24px; font-weight: 800; color: #f8fafc; letter-spacing: -0.02em;">
+                🏭 APEXINSPECT AI — TRUNG TÂM ĐIỀU HÀNH CHẤT LƯỢNG SMT
+            </h1>
+            <p style="margin: 0; color: #94a3b8; font-size: 13px;">
+                Dây chuyền: <strong>SMT-LINE-01</strong> &bull; Engine: <strong>ONNX Runtime CPU (≈35.5 FPS)</strong> &bull; Incident Agent: <strong>LangGraph HITL Core</strong>
+            </p>
+        </div>
+        <div style="text-align: right; background: rgba(15, 23, 42, 0.6); padding: 8px 14px; border-radius: 8px; border: 1px solid #334155;">
+            <div style="font-size: 11px; color: #64748b; font-family: 'JetBrains Mono', monospace;">EDGE INFERENCE TARGET</div>
+            <div style="font-size: 13px; font-weight: 700; color: #38bdf8; font-family: 'JetBrains Mono', monospace;">
+                LATENCY &lt; 35ms &bull; FP32 GRAPH OPT
+            </div>
+        </div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # Read historical metrics directly from Database
 db = SessionLocal()
@@ -282,31 +397,8 @@ with tab_vision:
             st.session_state.last_detections = detections
             st.session_state.last_latency = latency_ms
 
-            # Log to DB
+            # Ingest telemetry & evaluate triggers via unified InspectionService
             is_def = len(detections) > 0
-            def_classes = [d.get("class", "defect") for d in detections]
-            conf_scores = [d.get("confidence", 0.9) for d in detections]
-            bboxes = [d.get("bbox", []) for d in detections]
-
-            db = SessionLocal()
-            try:
-                insp_id = f"INSP-{uuid.uuid4().hex[:8].upper()}"
-                db.add(InspectionLog(
-                    inspection_id=insp_id,
-                    line_id="SMT-LINE-01",
-                    is_defective=is_def,
-                    defect_classes=def_classes,
-                    confidence_scores=conf_scores,
-                    bounding_boxes=bboxes,
-                    inference_time_ms=latency_ms
-                ))
-                db.commit()
-            except Exception as e:
-                db.rollback()
-            finally:
-                db.close()
-
-            # Consecutive defects check & incident trigger evaluation
             if is_def:
                 st.session_state.consecutive_defects += 1
             else:
@@ -314,69 +406,33 @@ with tab_vision:
 
             db = SessionLocal()
             try:
-                existing_pending = db.query(MESTicket).filter_by(line_id="SMT-LINE-01", status="PENDING_APPROVAL").first()
-                if not existing_pending:
-                    # Condition 1: 3 consecutive defects
-                    if st.session_state.consecutive_defects >= 3 and not st.session_state.active_incident:
-                        def_type = def_classes[0] if def_classes else "short_circuit"
-                        incident_result = st.session_state.agent.run(
-                            defect_class=def_type,
-                            consecutive_count=st.session_state.consecutive_defects,
-                            line_id="SMT-LINE-01"
-                        )
-                        now_utc = datetime.datetime.now(datetime.timezone.utc)
-                        ticket_id = f"TICK-{now_utc.strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
-                        db.add(MESTicket(
-                            ticket_id=ticket_id,
-                            line_id="SMT-LINE-01",
-                            severity="CRITICAL" if def_type in ["short_circuit", "short"] else "MEDIUM",
-                            trigger_reason=f"Phát hiện {st.session_state.consecutive_defects} sản phẩm liên tiếp có lỗi '{def_type}' trên chuyền SMT-LINE-01.",
-                            root_cause_analysis=incident_result.get("rca_analysis", ""),
-                            recommended_sop=", ".join(incident_result.get("sop_citations", [])) or "SOP-SMT-001",
-                            action_type=incident_result.get("proposed_action", "HALT_LINE"),
-                            status="PENDING_APPROVAL",
-                            created_at=now_utc
-                        ))
-                        db.commit()
-                        incident_result["ticket_id"] = ticket_id
-                        st.session_state.active_incident = incident_result
-
-                    # Condition 2: Yield Rate Drift (error rate > 15% in window of >= 10 items)
-                    elif not st.session_state.active_incident:
-                        recent_logs_w = db.query(InspectionLog).filter_by(line_id="SMT-LINE-01").order_by(InspectionLog.timestamp.desc()).limit(30).all()
-                        w_len = len(recent_logs_w)
-                        w_defs = sum(1 for l in recent_logs_w if l.is_defective)
-                        w_ratio = w_defs / w_len if w_len > 0 else 0.0
-                        if w_len >= 10 and w_ratio > 0.15:
-                            all_defs = []
-                            for l in recent_logs_w:
-                                if l.is_defective and l.defect_classes:
-                                    all_defs.extend(l.defect_classes if isinstance(l.defect_classes, list) else [l.defect_classes])
-                            from collections import Counter
-                            prim_def = Counter(all_defs).most_common(1)[0][0] if all_defs else "defect"
-                            incident_result = st.session_state.agent.run(
-                                defect_class=prim_def,
-                                consecutive_count=w_defs,
-                                line_id="SMT-LINE-01"
-                            )
-                            now_utc = datetime.datetime.now(datetime.timezone.utc)
-                            ticket_id = f"TICK-{now_utc.strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
-                            db.add(MESTicket(
-                                ticket_id=ticket_id,
-                                line_id="SMT-LINE-01",
-                                severity="CRITICAL" if w_ratio > 0.30 else "MEDIUM",
-                                trigger_reason=f"Trượt ngưỡng tỷ lệ lỗi (Yield Rate Drift): {w_ratio*100:.1f}% lỗi ({w_defs}/{w_len}) trong cửa sổ trượt (ngưỡng cho phép: 15%). Lỗi xuất hiện nhiều nhất: '{prim_def}'.",
-                                root_cause_analysis=incident_result.get("rca_analysis", ""),
-                                recommended_sop=", ".join(incident_result.get("sop_citations", [])) or "SOP-SMT-001",
-                                action_type=incident_result.get("proposed_action", "ROUTE_REWORK"),
-                                status="PENDING_APPROVAL",
-                                created_at=now_utc
-                            ))
-                            db.commit()
-                            incident_result["ticket_id"] = ticket_id
-                            st.session_state.active_incident = incident_result
+                payload = InspectionCreate(
+                    line_id="SMT-LINE-01",
+                    is_defective=is_def,
+                    defect_classes=[d.get("class", "defect") for d in detections],
+                    confidence_scores=[d.get("confidence", 0.9) for d in detections],
+                    bounding_boxes=[d.get("bbox", []) for d in detections],
+                    inference_time_ms=latency_ms
+                )
+                log_entry, incident_triggered, created_ticket_id = InspectionService.record_telemetry(
+                    db=db,
+                    payload=payload,
+                    agent=st.session_state.agent
+                )
+                if incident_triggered and created_ticket_id:
+                    tick = db.query(MESTicket).filter_by(ticket_id=created_ticket_id).first()
+                    if tick:
+                        st.session_state.active_incident = {
+                            "ticket_id": tick.ticket_id,
+                            "defect_class": payload.defect_classes[0] if payload.defect_classes else "defect",
+                            "consecutive_count": st.session_state.consecutive_defects,
+                            "rca_analysis": tick.root_cause_analysis,
+                            "sop_citations": [tick.recommended_sop],
+                            "proposed_action": tick.action_type
+                        }
             except Exception as e:
                 db.rollback()
+                st.warning(f"Lỗi ghi nhận telemetry: {e}")
             finally:
                 db.close()
 
@@ -407,15 +463,17 @@ with tab_vision:
                         st.warning(f"⚠️ Phát hiện **{len(detections)} lỗi** trên ảnh tải lên: `{', '.join([d['class'] for d in detections])}`")
                         if st.button("🧠 Kích Hoạt Agent Phân Tích Lỗi Cho Ảnh Này", type="primary"):
                             primary_defect = detections[0]["class"]
+                            now_utc = datetime.datetime.now(datetime.timezone.utc)
+                            ticket_id = f"TICK-{now_utc.strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
+                            thread_id = f"incident-SMT-LINE-01-{ticket_id}"
                             incident_res = st.session_state.agent.run(
                                 defect_class=primary_defect,
                                 consecutive_count=1,
-                                line_id="SMT-LINE-01"
+                                line_id="SMT-LINE-01",
+                                thread_id=thread_id
                             )
                             db = SessionLocal()
                             try:
-                                now_utc = datetime.datetime.now(datetime.timezone.utc)
-                                ticket_id = f"TICK-{now_utc.strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
                                 db.add(MESTicket(
                                     ticket_id=ticket_id,
                                     line_id="SMT-LINE-01",
@@ -425,7 +483,17 @@ with tab_vision:
                                     recommended_sop=", ".join(incident_res.get("sop_citations", [])) or "SOP-SMT-001",
                                     action_type=incident_res.get("proposed_action", "ROUTE_REWORK"),
                                     status="PENDING_APPROVAL",
+                                    thread_id=thread_id,
                                     created_at=now_utc
+                                ))
+                                db.add(AuditLog(
+                                    log_id=f"AUD-{uuid.uuid4().hex[:8].upper()}",
+                                    operator_id="OPERATOR_UPLOAD",
+                                    action="TRIGGER_CUSTOM_INSPECTION",
+                                    line_id="SMT-LINE-01",
+                                    ticket_id=ticket_id,
+                                    details=f"Created custom inspection incident {ticket_id} for defect '{primary_defect}'.",
+                                    source_ip="streamlit_ui"
                                 ))
                                 db.commit()
                                 incident_res["ticket_id"] = ticket_id
@@ -478,15 +546,17 @@ with tab_vision:
             if dets_s:
                 st.warning(f"Phát hiện lỗi: **`{dets_s[0]['class'].upper()}`** (Confidence: {dets_s[0]['confidence']*100:.1f}%)")
                 if st.button("🧠 Kích Hoạt AI Agent Phân Tích & Tra Cứu SOP Cho Mẫu Này"):
+                    now_utc = datetime.datetime.now(datetime.timezone.utc)
+                    ticket_id = f"TICK-{now_utc.strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
+                    thread_id = f"incident-SMT-LINE-01-{ticket_id}"
                     incident_res = st.session_state.agent.run(
                         defect_class=dets_s[0]["class"],
                         consecutive_count=3,
-                        line_id="SMT-LINE-01"
+                        line_id="SMT-LINE-01",
+                        thread_id=thread_id
                     )
                     db = SessionLocal()
                     try:
-                        now_utc = datetime.datetime.now(datetime.timezone.utc)
-                        ticket_id = f"TICK-{now_utc.strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
                         db.add(MESTicket(
                             ticket_id=ticket_id,
                             line_id="SMT-LINE-01",
@@ -496,7 +566,17 @@ with tab_vision:
                             recommended_sop=", ".join(incident_res.get("sop_citations", [])) or "SOP-SMT-001",
                             action_type=incident_res.get("proposed_action", "HALT_LINE"),
                             status="PENDING_APPROVAL",
+                            thread_id=thread_id,
                             created_at=now_utc
+                        ))
+                        db.add(AuditLog(
+                            log_id=f"AUD-{uuid.uuid4().hex[:8].upper()}",
+                            operator_id="OPERATOR_GALLERY",
+                            action="TRIGGER_GALLERY_INSPECTION",
+                            line_id="SMT-LINE-01",
+                            ticket_id=ticket_id,
+                            details=f"Created gallery sample incident {ticket_id} for defect '{dets_s[0]['class']}'.",
+                            source_ip="streamlit_ui"
                         ))
                         db.commit()
                         incident_res["ticket_id"] = ticket_id
@@ -549,30 +629,33 @@ with tab_agent:
                         if st.button(btn_approve_label, key=f"appr_{tick.ticket_id}", type="primary", use_container_width=True):
                             db = SessionLocal()
                             try:
-                                t = db.query(MESTicket).filter_by(ticket_id=tick.ticket_id).first()
-                                if t:
-                                    t.status = "APPROVED"
-                                    t.approved_by = "supervisor_on_duty"
-                                    t.resolved_at = datetime.datetime.now(datetime.timezone.utc)
-                                    if t.action_type == "HALT_LINE":
-                                        set_db_line_status("HALTED")
-                                        st.session_state.line_status = "HALTED"
-                                    db.commit()
+                                res = InspectionService.resolve_ticket(
+                                    db=db,
+                                    ticket_id=tick.ticket_id,
+                                    action="APPROVE",
+                                    approved_by="supervisor_on_duty",
+                                    agent=st.session_state.agent,
+                                    source_ip="streamlit_ui"
+                                )
+                                if tick.action_type == "HALT_LINE":
+                                    st.session_state.line_status = "HALTED"
                             finally:
                                 db.close()
                             st.session_state.active_incident = None
-                            st.success(f"ĐÃ THI HÀNH: Phiếu {tick.ticket_id} đã được phê duyệt thành công!")
+                            st.success(f"ĐÃ THI HÀNH: {res.get('message', f'Phiếu {tick.ticket_id} đã được phê duyệt thành công!')}")
                             st.rerun()
                     with col_act2:
                         if st.button("❌ Từ Chối / Bỏ Qua", key=f"rej_{tick.ticket_id}", use_container_width=True):
                             db = SessionLocal()
                             try:
-                                t = db.query(MESTicket).filter_by(ticket_id=tick.ticket_id).first()
-                                if t:
-                                    t.status = "REJECTED"
-                                    t.approved_by = "supervisor_on_duty"
-                                    t.resolved_at = datetime.datetime.now(datetime.timezone.utc)
-                                    db.commit()
+                                res = InspectionService.resolve_ticket(
+                                    db=db,
+                                    ticket_id=tick.ticket_id,
+                                    action="REJECT",
+                                    approved_by="supervisor_on_duty",
+                                    agent=st.session_state.agent,
+                                    source_ip="streamlit_ui"
+                                )
                             finally:
                                 db.close()
                             st.session_state.active_incident = None
@@ -598,13 +681,42 @@ with tab_agent:
             col_act1, col_act2 = st.columns(2)
             with col_act1:
                 if st.button("✅ Phê Duyệt Dừng Chuyền", type="primary", use_container_width=True):
-                    set_db_line_status("HALTED")
+                    db = SessionLocal()
+                    try:
+                        t_id = inc.get("ticket_id")
+                        if t_id:
+                            InspectionService.resolve_ticket(
+                                db=db,
+                                ticket_id=t_id,
+                                action="APPROVE",
+                                approved_by="supervisor_on_duty",
+                                agent=st.session_state.agent,
+                                source_ip="streamlit_ui"
+                            )
+                        else:
+                            set_db_line_status("HALTED")
+                    finally:
+                        db.close()
                     st.session_state.line_status = "HALTED"
                     st.session_state.active_incident = None
                     st.success("ĐÃ THI HÀNH: Dây chuyền SMT-LINE-01 đã được dừng khẩn cấp an toàn theo SOP-SMT-003!")
                     st.rerun()
             with col_act2:
                 if st.button("❌ Bỏ Qua / Cảnh Báo Lại", use_container_width=True):
+                    t_id = inc.get("ticket_id")
+                    if t_id:
+                        db = SessionLocal()
+                        try:
+                            InspectionService.resolve_ticket(
+                                db=db,
+                                ticket_id=t_id,
+                                action="REJECT",
+                                approved_by="supervisor_on_duty",
+                                agent=st.session_state.agent,
+                                source_ip="streamlit_ui"
+                            )
+                        finally:
+                            db.close()
                     st.session_state.active_incident = None
                     st.session_state.consecutive_defects = 0
                     st.info("Đã hủy bỏ đề xuất. Dây chuyền tiếp tục vận hành.")

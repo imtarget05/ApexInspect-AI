@@ -88,15 +88,28 @@ CREATE TABLE inspections (
 CREATE TABLE mes_tickets (
     ticket_id VARCHAR(64) PRIMARY KEY,
     line_id VARCHAR(50) REFERENCES production_lines(line_id),
-    severity VARCHAR(20) NOT NULL,         -- 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'
+    severity VARCHAR(20) NOT NULL,         -- 'LOW', 'MEDIUM', 'CRITICAL'
     trigger_reason TEXT NOT NULL,          -- Lý do kích hoạt cảnh báo
     root_cause_analysis TEXT NOT NULL,     -- Phân tích nguyên nhân từ AI
     recommended_sop VARCHAR(100) NOT NULL, -- Quy trình chuẩn đề xuất
     action_type VARCHAR(50) NOT NULL,      -- 'HALT_LINE', 'ROUTE_REWORK', 'CALIBRATE'
     status VARCHAR(20) DEFAULT 'PENDING_APPROVAL', -- 'PENDING_APPROVAL', 'APPROVED', 'REJECTED'
     approved_by VARCHAR(100),
+    thread_id VARCHAR(100),                -- LangGraph checkpoint thread identifier
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     resolved_at TIMESTAMP
+);
+
+-- Bảng kiểm toán bất biến (Immutable Audit Trail)
+CREATE TABLE audit_logs (
+    log_id VARCHAR(64) PRIMARY KEY,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    operator_id VARCHAR(100) NOT NULL,
+    action VARCHAR(50) NOT NULL,           -- 'TRIGGER_CONSECUTIVE_DEFECTS', 'APPROVE_ACTION', 'RESUME_LINE'
+    line_id VARCHAR(50) NOT NULL,
+    ticket_id VARCHAR(64),
+    details TEXT,
+    source_ip VARCHAR(50)
 );
 ```
 

@@ -9,7 +9,7 @@
   [![LangGraph](https://img.shields.io/badge/LangGraph-000000?style=flat-square&logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/)
   [![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io/)
   [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)](https://docker.com)
-  [![Tests](https://img.shields.io/badge/Tests-9%20passing-success?style=flat-square)](#)
+  [![Tests](https://img.shields.io/badge/Tests-61%20passing-success?style=flat-square)](#)
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
   [![CI](https://github.com/imtarget05/Harness-of-Target/actions/workflows/ci.yml/badge.svg)](https://github.com/imtarget05/Harness-of-Target/actions/workflows/ci.yml)
@@ -18,44 +18,49 @@
 
 ---
 
-**ApexInspect AI** is an enterprise-grade, edge-deployable **Smart Factory Vision & Autonomous Quality Agent** system. It bridges high-speed Computer Vision inspection on surface-mount assembly lines (SMT/PCBA) with an Agentic AI decision pipeline. When recurring or critical defects appear, the system diagnoses root causes via SOP retrieval, proposes corrective actions, and synchronizes with Manufacturing Execution Systems (**MES**) under strict **Human-In-The-Loop (HITL)** governance.
+**ApexInspect AI** is an enterprise-grade, edge-deployable **Smart Factory Vision & Autonomous Quality Agent** system. It bridges high-speed Computer Vision inspection on surface-mount assembly lines (SMT/PCBA) with an Agentic AI decision pipeline and real-time **Modbus TCP Industrial PLC** hardware control. When recurring or critical defects appear, the system diagnoses root causes via Okapi BM25 SOP retrieval, proposes corrective actions, and synchronizes with Manufacturing Execution Systems (**MES**) under strict **Human-In-The-Loop (HITL)** governance and immutable **Audit Trail** logging.
 
-Core workflow: `Inspect → Detect → Diagnose → Propose → Human Approve → Execute`
+Core workflow: `Inspect → Detect → Diagnose → Propose → Human Approve → PLC Dispatch & MES Sync`
 
 ## ✨ Key Technical Highlights
 
-1. **High-Throughput Edge Inference (ONNX Runtime)**: Exported YOLOv8 defect detection model optimized via ONNX Runtime CPU — **≈28 FPS (35 ms/frame)** on commodity 2-vCPU cloud hardware.
-2. **Zero-Hallucination SOP Knowledge Retrieval**: Hybrid retrieval over Standard Operating Procedures and equipment manuals, enforcing strict grounded citations (`[SOP-SMT-001]`).
-3. **Deterministic Human-In-The-Loop (HITL) Safety**: LangGraph `MemorySaver` + `interrupt()` primitives — dangerous factory-floor mutations (e.g. halting a 500-unit/hour line) **strictly require explicit supervisor approval**.
-4. **Resilient Dual-Mode Persistence**: Native **Neon Serverless PostgreSQL** integration with automatic zero-config fallback to **SQLite** (`factory.db`) for seamless offline operation.
-5. **Zero-Cost Deployment (100% Free Tier)**: Packaged for **Hugging Face Spaces** (2 vCPU, 16 GB RAM) powered by **Groq API** (Llama 3.3 70B, 30 RPM free).
+1. **High-Throughput Edge Inference (ONNX Runtime + SAHI Patching)**: Exported YOLOv8 defect detection model optimized via ONNX Runtime CPU (**≈28 FPS, 35 ms/frame**). Includes Sliced Automated Hyper Inference (`HighResPatchInferencer`) with NMS merging for microscopic PCB defects on high-res 4K AOI images.
+2. **Industrial OT & Modbus TCP PLC Bridge**: Native Modbus TCP client (`PLCBridge`) and Virtual Modbus Server (`VirtualModbusServer`) to directly control conveyor interlocks, pneumatic reject diverters, and andon tower lights (Red/Yellow/Green).
+3. **Zero-Hallucination IPC-A-610 SOP Knowledge Retrieval**: Okapi BM25 Hybrid RAG engine with domain-specific synonym expansion indexing standard operating procedures including IPC-A-610 Class 3 solder criteria, thermal reflow profile drift (TAL/PWI), and pick & place nozzle maintenance.
+4. **Deterministic Human-In-The-Loop (HITL) Safety & Audit Trail**: LangGraph `MemorySaver` + `interrupt()` and `Command(resume=...)` primitives with dynamic thread IDs. Factory-floor actions strictly require supervisor sign-off and are recorded into an immutable `AuditLog` table.
+5. **Unified Architecture & Production Gateway**: Consolidated `InspectionService` layer shared across FastAPI REST gateway and Streamlit UI, protected by `X-API-KEY` security authentication.
+6. **Resilient Dual-Mode Persistence**: Native **Neon Serverless PostgreSQL** integration with automatic zero-config fallback to **SQLite** (`factory.db`) with row-level locking for seamless offline operation.
 
 ## 🏗️ System Architecture
 
 ```mermaid
 flowchart TD
     subgraph VisionLayer ["1. Edge Vision Engine (OpenCV + ONNX)"]
-        Cam["Production Line Camera / Stream"] --> Pre["OpenCV Preprocessor (ROI + CLAHE)"]
-        Pre --> Infer["ONNX Runtime Engine (YOLOv8n-PCB)"]
+        Cam["Camera Stream / RTSP Ingestion"] --> Pre["Letterbox Normalization (pad=114)"]
+        Pre --> Patching["SAHI High-Res Patching Engine"]
+        Patching --> Infer["ONNX Runtime Engine (YOLOv8n-PCB)"]
         Infer --> Telemetry["Defect Telemetry (BBox, Class, Confidence)"]
     end
 
-    subgraph CorePlatform ["2. Data & Platform Layer (FastAPI)"]
+    subgraph ServiceLayer ["2. Unified Platform & Gateway (FastAPI + InspectionService)"]
         Telemetry --> Ingest["FastAPI Ingestion Engine"]
-        Ingest --> DB[("Neon PostgreSQL / SQLite")]
-        Ingest --> Trigger{"Trigger Engine: ≥3 Defects or Yield < 85%"}
+        Ingest --> Service["InspectionService (Single Source of Truth)"]
+        Service --> DB[("Neon PostgreSQL / SQLite")]
+        Service --> Audit[("Immutable AuditLog")]
+        Service --> Trigger{"Trigger Engine: 3-Consecutive or Yield Drift >15%"}
     end
 
     subgraph AgenticAutomation ["3. Agentic Decision Core (LangGraph)"]
-        Trigger -->|Anomaly Event| Agent["Quality Incident Agent"]
-        Agent --> RAG["Hybrid SOP RAG (Maintenance Manuals)"]
+        Trigger -->|Incident Event| Agent["Quality Incident Agent (StateGraph)"]
+        Agent --> RAG["Okapi BM25 SOP RAG (IPC-A-610 Standards)"]
         Agent --> Propose["Draft MES Action (Halt Line / Reroute)"]
-        Propose --> HITL{"Human-In-The-Loop Checkpoint"}
+        Propose --> HITL{"Human-In-The-Loop Checkpoint: interrupt()"}
     end
 
-    subgraph ActionExecution ["4. MES & Operations (Streamlit Console)"]
-        HITL -->|Supervisor Approves| MES["Execute MES Action (Update Line State)"]
-        HITL -->|Supervisor Rejects| Resume["Log Incident & Resume"]
+    subgraph IndustrialOT ["4. Industrial Actuation (Modbus TCP PLC)"]
+        HITL -->|Supervisor Approves| MES["Service.resolve_ticket()"]
+        MES --> PLC["PLCBridge (Modbus TCP Client)"]
+        PLC --> Actuators["Conveyor E-Stop | Diverter Gate | Andon Tower Light"]
         MES --> DB
     end
 ```
@@ -130,20 +135,27 @@ The optional Hugging Face deploy job skips gracefully (exit 0) when `HF_TOKEN` /
 ## 📂 Project Structure
 
 ```text
-Harness-of-Target/
+ApexInspect-AI/
 ├── Dockerfile                  # Container definition for Hugging Face Spaces
-├── requirements.txt            # Minimal, pinned dependencies
+├── requirements.txt            # Minimal, pinned dependencies (including pymodbus)
 ├── .github/workflows/          # CI/CD pipelines (ci.yml, cd.yml)
 ├── data/
-│   └── sops/                   # Standard Operating Procedures (SOPs)
-├── models/
-│   └── train.py                # Model training and ONNX exporter
+│   ├── sops/                   # IPC-A-610 Standard Operating Procedures (SOP-001 to 006)
+│   └── sample_pcbs/            # Real Kaggle PCB frames for the Live Feed gallery
+├── models/                     # Single source of truth for the trained model
+│   ├── yolov8n_pcb_defect.onnx # Deployed Colab-trained weights (~12 MB, git-tracked)
+│   ├── train.py                # YOLOv8 training + ONNX export (Colab/GPU)
+│   ├── training_data.yaml      # Exact data.yaml used for training (6 classes)
+│   └── MODEL_CARD.md           # Provenance, IO shapes, thresholds, evidence
+├── notebooks/                  # Colab notebook only (frozen evidence of the run)
+├── scripts/                    # Ops: dataset → DB ingest, gallery rebuild, verification
 ├── src/
-│   ├── vision/                 # OpenCV stream & ONNX Runtime detector
-│   ├── agent/                  # LangGraph StateGraph, HITL, and RAG
-│   ├── backend/                # FastAPI Gateway & SQLAlchemy database models
+│   ├── vision/                 # ONNX Runtime detector, SAHI High-Res patching, RTSP stream
+│   ├── industrial/             # Modbus TCP PLC Bridge & Virtual PLC Simulator Server
+│   ├── agent/                  # LangGraph StateGraph, HITL interrupt/resume, BM25 RAG
+│   ├── backend/                # InspectionService, FastAPI Gateway & AuditLog models
 │   └── ui/                     # Streamlit multi-tab operator console
-└── tests/                      # Unit and integration test suite
+└── tests/                      # 61 Unit and integration test suite (100% PASS)
 ```
 
 ## 📄 License

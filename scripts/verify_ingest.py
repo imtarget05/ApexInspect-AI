@@ -18,10 +18,17 @@ try:
     print('kaggle_pass:', db.query(InspectionLog).filter(
         InspectionLog.image_filename.like('pcb-kaggle/%'),
         InspectionLog.is_defective.is_(False)).count())
-    rows = db.execute(text("select defect_classes, count(*) from inspections "
+    # Postgres exposes these JSON columns as `json`, which has no equality
+    # operator -> GROUP BY on the raw column fails. Cast to text instead.
+    dialect = db.get_bind().dialect.name
+    classes_expr = "defect_classes::text" if dialect == "postgresql" else "defect_classes"
+    rows = db.execute(text(f"select {classes_expr}, count(*) from inspections "
                            "where is_defective and image_filename like 'pcb-kaggle/%' "
-                           "group by defect_classes order by 2 desc limit 5")).fetchall()
+                           "group by 1 order by 2 desc limit 5")).fetchall()
     print('defect_mix:', rows)
+    print('lines:', db.execute(text("select line_id, count(*) from inspections "
+                                    "where image_filename like 'pcb-kaggle/%' "
+                                    "group by 1")).fetchall())
     print('metrics:', get_line_metrics('SMT-LINE-01', db=db))
 finally:
     db.close()

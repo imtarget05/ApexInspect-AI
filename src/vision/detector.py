@@ -14,8 +14,7 @@ except Exception:
 def resolve_model_path(provided: Optional[str] = None) -> str:
     """Resolve the canonical ONNX model path.
 
-    Priority: explicit arg -> $MODEL_PATH -> models/yolov8n_pcb_defect.onnx
-    -> notebooks/best.onnx (Colab export fallback).
+    Priority: explicit arg -> $MODEL_PATH -> models/yolov8n_pcb_defect.onnx.
     Relative paths are resolved against the project root.
     """
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -27,7 +26,6 @@ def resolve_model_path(provided: Optional[str] = None) -> str:
         candidates.append(env_path)
     candidates += [
         "models/yolov8n_pcb_defect.onnx",
-        "notebooks/best.onnx",
     ]
     for cand in candidates:
         if os.path.isabs(cand):
@@ -52,7 +50,7 @@ class PCBDefectDetector:
 
     CLASS_NAMES = ["missing_hole", "mouse_bite", "open_circuit", "short_circuit", "spur", "spurious_copper"]
 
-    # Raw training labels (see notebooks/data.yaml: `short`) mapped to the
+    # Raw training labels (see models/training_data.yaml: `short`) mapped to the
     # canonical names used across the app (simulator, backend, SOP RAG).
     CLASS_ALIASES = {
         "short": "short_circuit",
@@ -131,19 +129,46 @@ class PCBDefectDetector:
             **self.model_meta,
         }
 
+        self._last_letterbox_info = None
+
+    @staticmethod
+    def letterbox(im: np.ndarray, new_shape=(640, 640), color=(114, 114, 114)) -> Tuple[np.ndarray, float, Tuple[float, float]]:
+        """Letterbox image into new_shape with padding to preserve aspect ratio (Ultralytics standard)."""
+        shape = im.shape[:2]  # [height, width]
+        if isinstance(new_shape, int):
+            new_shape = (new_shape, new_shape)
+
+        r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
+        new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
+        dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]
+        dw /= 2.0
+        dh /= 2.0
+
+        if shape[::-1] != new_unpad:
+            im = cv2.resize(im, new_unpad, interpolation=cv2.INTER_LINEAR)
+
+        top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
+        left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
+        im = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
+        return im, r, (dw, dh)
+
     def preprocess(self, img: np.ndarray) -> np.ndarray:
-        """Applies OpenCV CLAHE contrast enhancement and normalization."""
+        """Applies OpenCV CLAHE contrast enhancement and letterbox normalization."""
         yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         yuv[:, :, 0] = clahe.apply(yuv[:, :, 0])
         enhanced = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)
 
-        blob = cv2.dnn.blobFromImage(enhanced, 1/255.0, (640, 640), swapRB=True, crop=False)
+        # Standard Letterbox: preserves aspect ratio, pads with 114 grey
+        boxed, r, (dw, dh) = self.letterbox(enhanced, (640, 640), color=(114, 114, 114))
+        self._last_letterbox_info = (r, (dw, dh))
+
+        blob = cv2.dnn.blobFromImage(boxed, 1/255.0, (640, 640), swapRB=True, crop=False)
         return blob
 
-    def _postprocess_yolov8(self, raw_output: np.ndarray, orig_w: int, orig_h: int) -> List[Dict[str, Any]]:
+    def _postprocess_yolov8(self, raw_output: np.ndarray, orig_w: int, orig_h: int, letterbox_info: Optional[Tuple[float, Tuple[float, float]]] = None) -> List[Dict[str, Any]]:
         """
-        Parses YOLOv8 ONNX raw output (1, 4+nc, 8400) and applies Non-Maximum Suppression (NMS).
+        Parses YOLOv8 ONNX raw output (1, 4+nc, 8400), un-letterboxes boxes, and applies NMS.
         """
         try:
             # Shape: (1, 4 + num_classes, 8400) -> Transpose to (8400, 4 + num_classes)
@@ -155,9 +180,15 @@ class PCBDefectDetector:
             confidences = []
             class_ids = []
 
-            # Coordinate scaling factors
-            x_factor = orig_w / 640.0
-            y_factor = orig_h / 640.0
+            # Determine coordinate scaling
+            lb_info = letterbox_info or getattr(self, "_last_letterbox_info", None)
+            use_letterbox = lb_info is not None
+
+            if use_letterbox:
+                r, (dw, dh) = lb_info
+            else:
+                x_factor = orig_w / 640.0
+                y_factor = orig_h / 640.0
 
             scores_matrix = preds[:, 4:]
             max_class_ids = np.argmax(scores_matrix, axis=1)
@@ -171,10 +202,24 @@ class PCBDefectDetector:
 
             for pred, score, cls_id in zip(valid_preds, valid_scores, valid_classes):
                 cx, cy, w, h = pred[0], pred[1], pred[2], pred[3]
-                left = int((cx - w / 2) * x_factor)
-                top = int((cy - h / 2) * y_factor)
-                width = int(w * x_factor)
-                height = int(h * y_factor)
+
+                if use_letterbox and r > 0:
+                    x1 = (cx - w / 2.0 - dw) / r
+                    y1 = (cy - h / 2.0 - dh) / r
+                    x2 = (cx + w / 2.0 - dw) / r
+                    y2 = (cy + h / 2.0 - dh) / r
+
+                    left = max(0, min(int(round(x1)), orig_w - 1))
+                    top = max(0, min(int(round(y1)), orig_h - 1))
+                    right = max(0, min(int(round(x2)), orig_w))
+                    bottom = max(0, min(int(round(y2)), orig_h))
+                    width = max(1, right - left)
+                    height = max(1, bottom - top)
+                else:
+                    left = int((cx - w / 2) * x_factor)
+                    top = int((cy - h / 2) * y_factor)
+                    width = int(w * x_factor)
+                    height = int(h * y_factor)
 
                 boxes.append([left, top, width, height])
                 confidences.append(float(score))

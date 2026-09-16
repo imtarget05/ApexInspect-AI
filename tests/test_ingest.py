@@ -26,6 +26,22 @@ def make_tree(root: Path, layout: str):
             for i in range(3):
                 img = (np.random.rand(64, 64, 3) * 255).astype(np.uint8)
                 cv2.imwrite(str(d / f"img{i}.jpg"), img)
+    elif layout == "kaggle_real":
+        # Real akhatova/pcb-defects layout as shipped by kagglehub:
+        # <root>/PCB_DATASET/images/<Class>/*.jpg + auxiliary dirs that must
+        # NOT be streamed (rotation/ = augmented copies, PCB_USED/ = raw).
+        img_root = root / "PCB_DATASET" / "images"
+        for cls in ["Missing_hole", "Short"]:
+            d = img_root / cls
+            d.mkdir(parents=True, exist_ok=True)
+            for i in range(3):
+                img = (np.random.rand(64, 64, 3) * 255).astype(np.uint8)
+                cv2.imwrite(str(d / f"img{i}.jpg"), img)
+        for aux in ["rotation", "PCB_USED"]:
+            d = root / "PCB_DATASET" / aux / "Short_rotation"
+            d.mkdir(parents=True, exist_ok=True)
+            img = (np.random.rand(64, 64, 3) * 255).astype(np.uint8)
+            cv2.imwrite(str(d / "dup.jpg"), img)
     else:
         d = root / "images" / "val"
         d.mkdir(parents=True, exist_ok=True)
@@ -51,6 +67,14 @@ class TestIngest(unittest.TestCase):
             make_tree(Path(td), "yolo")
             out = ingest.collect_yolo_images(Path(td))
             self.assertEqual(len(out), 4)
+
+    def test_collect_real_kaggle_layout_descends_into_pcb_dataset(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            make_tree(root, "kaggle_real")
+            out = ingest.collect_dataset_images(root)
+            self.assertEqual(len(out), 6)
+            self.assertTrue(all("PCB_DATASET/images/" in p.as_posix() for p, _ in out))
 
     def test_collect_prefers_kaggle(self):
         with tempfile.TemporaryDirectory() as td:

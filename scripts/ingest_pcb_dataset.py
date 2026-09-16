@@ -1,6 +1,13 @@
 """Ingest real PCB images (Kaggle akhatova/pcb-defects) through the ONNX
 detector and store telemetry as InspectionLog rows (Neon production DB).
 
+Dataset source (documented in notebooks/train_pcb_defect_yolo.ipynb, Buoc 2):
+Kaggle `akhatova/pcb-defects` fetched via kagglehub -> 6 defect classes
+(Missing_hole, Mouse_bite, Open_circuit, Short, Spur, Spurious_copper).
+Only the labelled `PCB_DATASET/images/<Class>` images are streamed; the
+auxiliary `rotation/` (augmented copies) and `PCB_USED/` (raw boards) folders
+are skipped so the defect mix is not skewed by duplicates.
+
 Usage:
     .venv/bin/python scripts/ingest_pcb_dataset.py --limit 200
     .venv/bin/python scripts/ingest_pcb_dataset.py --limit 50 --dataset-dir /path/to/dataset
@@ -26,13 +33,41 @@ from src.vision.detector import PCBDefectDetector  # noqa: E402
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 DATASET_SLUG = "akhatova/pcb-defects"
 TIMESTAMP_SPACING_S = 20
+YOLO_SPLITS = {"train", "val", "test"}
+# Non-labelled Kaggle folders (augmented copies / raw boards / annotations).
+AUX_DIRS = {"images", "labels", "annotations", "pcb_used", "rotation"}
+
+
+def _dataset_roots(dataset_dir: Path):
+    """Candidate roots, deepest first: kagglehub nests the data in `PCB_DATASET/`."""
+    nested = dataset_dir / "PCB_DATASET"
+    if nested.is_dir():
+        return [nested, dataset_dir]
+    return [dataset_dir]
 
 
 def collect_kaggle_images(root: Path):
-    """Scan immediate class subdirs (except images/labels), recursive rglob."""
+    """Collect the labelled Kaggle images from `<root>/images/<Class>/*.jpg`.
+
+    Falls back to class subdirs directly under `root` for datasets shipping the
+    class folders at top level. Auxiliary folders (`rotation/`, `PCB_USED/`,
+    `Annotations/`) are skipped: they duplicate labelled boards or hold only
+    annotations, so streaming them would skew the defect mix.
+    """
+    img_root = root / "images"
+    if img_root.is_dir():
+        cls_dirs = [d for d in sorted(img_root.iterdir(), key=lambda p: p.name)
+                    if d.is_dir() and d.name.lower() not in YOLO_SPLITS]
+        if cls_dirs:
+            out = []
+            for d in cls_dirs:
+                for p in sorted(d.rglob("*")):
+                    if p.is_file() and p.suffix.lower() in IMG_EXTS:
+                        out.append((p, d.name))
+            return out
     out = []
     for cls_dir in sorted(root.iterdir(), key=lambda p: p.name):
-        if not cls_dir.is_dir() or cls_dir.name in {"images", "labels"}:
+        if not cls_dir.is_dir() or cls_dir.name.lower() in AUX_DIRS:
             continue
         for p in sorted(cls_dir.rglob("*")):
             if p.is_file() and p.suffix.lower() in IMG_EXTS:
@@ -53,10 +88,16 @@ def collect_yolo_images(root: Path):
 
 
 def collect_dataset_images(dataset_dir: Path):
-    kaggle = collect_kaggle_images(dataset_dir)
-    if kaggle:
-        return kaggle
-    return collect_yolo_images(dataset_dir)
+    """Collect (path, class_or_split) pairs from either supported layout."""
+    for base in _dataset_roots(dataset_dir):
+        kaggle = collect_kaggle_images(base)
+        if kaggle:
+            return kaggle
+    for base in _dataset_roots(dataset_dir):
+        yolo = collect_yolo_images(base)
+        if yolo:
+            return yolo
+    return []
 
 
 def find_dataset_dir(cli_dir=None):
