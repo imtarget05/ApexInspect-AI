@@ -1,0 +1,26 @@
+{
+  "model": "yolov8n_pcb_defect.onnx",
+  "model_path": "/Users/mainguyenbinhtan/Downloads/ApexInspect-AI/models/yolov8n_pcb_defect.onnx",
+  "input_shape": [
+    1,
+    3,
+    640,
+    640
+  ],
+  "output_shape": [
+    1,
+    10,
+    8400
+  ],
+  "n_warmup": 5,
+  "n_measure": 20,
+  "avg_latency_ms": 43.36,
+  "min_latency_ms": 42.1,
+  "max_latency_ms": 50.17,
+  "fps": 23.1,
+  "confidence_threshold": 0.5,
+  "hardware": "Apple M-series (local macOS)",
+  "onnx_runtime": "1.30.0",
+  "benchmark_date": "2026-09-17 01:14:20",
+  "notes": "Synthetic PCB frames via PCBCameraSimulator; production-quality gate applied."
+}
