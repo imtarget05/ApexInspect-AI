@@ -10,23 +10,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Create non-root user for security (SDC best practice)
+RUN groupadd -r apexinspect && useradd -r -g apexinspect -d /app -s /sbin/nologin apexinspect
+
 # Copy and install python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy project code
-COPY . .
+COPY --chown=apexinspect:apexinspect . .
 
-# Hugging Face Spaces default port is 7860
+# Switch to non-root user
+USER apexinspect
+
+# Hugging Face Spaces / Azure Container Apps default port
 EXPOSE 7860
 
-# Streamlit runner configured for container environment
+# Healthcheck: branch by APP_MODE (api -> /health, ui -> Streamlit health)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD sh -c "if [ \"$APP_MODE\" = \"api\" ]; then curl -fsS http://localhost:${PORT:-7860}/health || exit 1; else curl -fsS http://localhost:${PORT:-7860}/_stcore/health || exit 1; fi"
+
+# Streamlit defaults for container environment
 ENV STREAMLIT_SERVER_PORT=7860
 ENV STREAMLIT_SERVER_ADDRESS=0.0.0.0
 ENV STREAMLIT_SERVER_HEADLESS=true
 ENV STREAMLIT_SERVER_ENABLE_CORS=false
 ENV STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false
 
-# Support dynamic port binding for Azure Container Apps / Hugging Face
-CMD ["sh", "-c", "streamlit run src/ui/app.py --server.port=${PORT:-7860} --server.address=0.0.0.0"]
+# Multi-Space entrypoint: APP_MODE=api runs the FastAPI gateway,
+# anything else (default) runs the Streamlit Operator Console.
+# Both bind to 0.0.0.0 on the single HF Space public port.
+CMD ["sh", "-c", "if [ \"$APP_MODE\" = \"api\" ]; then exec uvicorn src.backend.main:app --host 0.0.0.0 --port ${PORT:-7860}; else exec streamlit run src/ui/app.py --server.port=${PORT:-7860} --server.address=0.0.0.0; fi"]
+
 
