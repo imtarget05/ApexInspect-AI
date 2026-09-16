@@ -54,8 +54,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy-hf-space:
-    name: Deploy to Hugging Face Space (optional)
+  deploy-hf-space-ui:
+    name: Deploy to HF Space — UI (Streamlit)
     runs-on: ubuntu-latest
     needs: [build-push-image]
     if: github.ref == 'refs/heads/main'
@@ -65,20 +65,49 @@ jobs:
           fetch-depth: 0
           lfs: true
 
-      - name: Push to Hugging Face Space
+      - name: Push to Hugging Face Space (UI)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_SPACE: ${{ vars.HF_SPACE }}
+          HF_SPACE: ${{ vars.HF_UI_SPACE }}
         run: |
           set -euo pipefail
           if [ -z "$HF_TOKEN" ]; then
-            echo "No HF_TOKEN secret configured — skipping Hugging Face deploy."
+            echo "No HF_TOKEN secret configured — skipping UI Space deploy."
             exit 0
           fi
           if [ -z "$HF_SPACE" ]; then
-            echo "No HF_SPACE variable configured (e.g. imtarget05/apexinspect-ai) — skipping Hugging Face deploy."
+            echo "No HF_UI_SPACE variable configured (e.g. imtarget05/apexinspect-ui) — skipping UI Space deploy."
             exit 0
           fi
-          git remote add space "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}"
-          git push --force space main
-          echo "Deployed to https://huggingface.co/spaces/${HF_SPACE}"
+          git remote add space-ui "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}"
+          git push --force space-ui main
+          echo "Deployed UI to https://huggingface.co/spaces/${HF_SPACE}"
+
+  deploy-hf-space-api:
+    name: Deploy to HF Space — API (FastAPI)
+    runs-on: ubuntu-latest
+    needs: [build-push-image]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Push to Hugging Face Space (API)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE: ${{ vars.HF_API_SPACE }}
+        run: |
+          set -euo pipefail
+          if [ -z "$HF_TOKEN" ]; then
+            echo "No HF_TOKEN secret configured — skipping API Space deploy."
+            exit 0
+          fi
+          if [ -z "$HF_SPACE" ]; then
+            echo "No HF_API_SPACE variable configured (e.g. imtarget05/apexinspect-api) — skipping API Space deploy."
+            exit 0
+          fi
+          git remote add space-api "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}"
+          git push --force space-api main
+          echo "Deployed API to https://huggingface.co/spaces/${HF_SPACE}"
