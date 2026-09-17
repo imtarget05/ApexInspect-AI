@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ApexInspect AI — Operator Dashboard</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="scada-header">
+  <div>
+    <h1>🏭 ApexInspect AI</h1>
+    <p class="sub">Operator Dashboard — Smart Factory Quality Platform (static, free-tier)</p>
+  </div>
+  <div id="health-banner" class="banner banner-unknown" role="status">⏳ Đang kiểm tra API…</div>
+</header>
+
+<section class="card settings">
+  <h2>⚙️ Cấu hình kết nối</h2>
+  <label>API Base URL
+    <input id="api-base" type="url" spellcheck="false">
+  </label>
+  <label>X-API-KEY (cho thao tác MES)
+    <input id="api-key" type="password" placeholder="nhập key MES…" autocomplete="off">
+  </label>
+  <button id="btn-save" type="button">💾 Lưu cấu hình</button>
+  <span id="save-hint" class="hint"></span>
+</section>
+
+<main class="grid">
+  <section class="card">
+    <h2>📷 Gửi inspection mẫu</h2>
+    <label>Line ID <input id="insp-line" value="SMT-LINE-01"></label>
+    <label class="row"><input id="insp-defective" type="checkbox" checked> is_defective</label>
+    <label>Defect class <input id="insp-class" value="short_circuit"></label>
+    <label>Confidence <input id="insp-conf" type="number" step="0.01" min="0" max="1" value="0.94"></label>
+    <label>Inference (ms) <input id="insp-ms" type="number" step="0.1" value="25.0"></label>
+    <button id="btn-inspect" type="button">🚀 Gửi inspection</button>
+    <pre id="inspect-result" class="result">—</pre>
+  </section>
+
+  <section class="card">
+    <h2>🎫 Tickets gần nhất <button id="btn-tickets" type="button" class="mini">🔄 Refresh</button></h2>
+    <table>
+      <thead><tr><th>Ticket</th><th>Line</th><th>Severity</th><th>Action</th><th>Status</th></tr></thead>
+      <tbody id="tickets-body"><tr><td colspan="5">—</td></tr></tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>🔧 MES phê duyệt</h2>
+    <label>Ticket ID <input id="mes-ticket" placeholder="TICK-…"></label>
+    <label>Action
+      <select id="mes-action">
+        <option value="approve">approve (HALT_LINE)</option>
+        <option value="reject">reject (tiếp tục chạy)</option>
+      </select>
+    </label>
+    <label>Approved by <input id="mes-by" value="supervisor_on_duty"></label>
+    <button id="btn-mes" type="button">✅ Thực thi</button>
+    <pre id="mes-result" class="result">—</pre>
+  </section>
+</main>
+
+<footer><small>ApexInspect AI · static dashboard → <span id="foot-api"></span> · free-tier (Render Static Site + API + Neon + Groq)</small></footer>
+<script src="app.js"></script>
+</body>
+</html>

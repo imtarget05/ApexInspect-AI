@@ -1,6 +1,7 @@
 # ── Render free-tier deploy ( Blueprint ) ─────────────────────────────
 # API chạy Docker image của repo (plan free, region frankfurt gần VN/EU).
-# UI chạy riêng trên Streamlit Community Cloud (BACKEND_URL -> API này).
+# Dashboard là static site thuần HTML/CSS/JS (không Streamlit, không build step),
+# gọi trực tiếp API qua fetch — free, CDN toàn cầu.
 services:
   - type: web
     name: apexinspect-api
@@ -25,3 +26,10 @@ services:
         sync: false
       - key: API_KEY
         sync: false
+  - type: web
+    name: apexinspect-dashboard
+    runtime: static
+    autoDeploy: true
+    buildCommand: "echo static"
+    staticPublishPath: ./dashboard
+

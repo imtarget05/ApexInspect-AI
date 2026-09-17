@@ -20,8 +20,10 @@ def test_health_contract_for_render():
     assert "version" in body
 
 
-def test_streamlit_launcher_remote_mode_imports_light():
-    """streamlit_app.py ở remote mode chỉ import stdlib + streamlit (nhẹ cho Cloud 1GB)."""
-    src = open("streamlit_app.py", encoding="utf-8").read()
-    assert "BACKEND_URL" in src
-    assert "src/ui/app.py" in src  # fallback local vẫn trỏ đúng app gốc
+def test_static_dashboard_contract_remote():
+    """Dashboard tĩnh remote: trỏ API Render + có cấu hình API base/key qua localStorage."""
+    src = open("dashboard/app.js", encoding="utf-8").read()
+    assert "https://apexinspect-api.onrender.com" in src
+    assert "localStorage" in src
+    assert "/api/v1/inspections" in src
+    assert "/api/v1/mes/action" in src
