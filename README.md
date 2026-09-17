@@ -3,8 +3,6 @@ title: ApexInspect AI — Smart Factory Quality Platform
 emoji: 🏭
 colorFrom: blue
 colorTo: gray
-sdk: docker
-app_port: 7860
 pinned: false
 ---
 
@@ -19,7 +17,7 @@ pinned: false
   [![LangGraph](https://img.shields.io/badge/LangGraph-000000?style=flat-square&logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/)
   [![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io/)
   [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)](https://docker.com)
-  [![Tests](https://img.shields.io/badge/Tests-61%20passing-success?style=flat-square)](#)
+  [![Tests](https://img.shields.io/badge/Tests-71%20passed-success?style=flat-square)](#)
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
   [![CI](https://github.com/imtarget05/Harness-of-Target/actions/workflows/ci.yml/badge.svg)](https://github.com/imtarget05/Harness-of-Target/actions/workflows/ci.yml)
@@ -212,7 +210,8 @@ The platform ships with a fully automated **GitHub Actions** pipeline:
 | Workflow | Trigger | Jobs |
 | :--- | :--- | :--- |
 | **CI** (`ci.yml`) | Push / PR → `main` | `pytest` test suite (Python 3.11) • Docker image build smoke test |
-| **CD** (`cd.yml`) | Push → `main` | Build + push Docker image to **GHCR** (`ghcr.io/imtarget05/harness-of-target:latest`) • Deploy to **Hugging Face Space** (optional) |
+| **CD** (`cd.yml`) | Push → `main` | Build + push Docker image to **GHCR** (`ghcr.io/imtarget05/apexinspect-ai:latest`) • Trigger **Render** deploy (autoDeploy + explicit API call) |
+| **Live URLs** | — | API: https://apexinspect-api.onrender.com • Dashboard: https://apexinspect-dashboard.onrender.com |
 
 ### Required Secrets & Providers
 
@@ -221,17 +220,23 @@ Configure under **repo → Settings → Secrets and variables → Actions**:
 | Name | Type | Where to get it | Required? |
 | :--- | :--- | :--- | :--- |
 | `GITHUB_TOKEN` | Secret (auto) | Provided automatically by GitHub Actions | ✅ Automatic |
-| `HF_TOKEN` | Secret | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) → New token (role: `write`) | Only for HF Space auto-deploy |
-| `HF_SPACE` | Variable | Your Space ID, e.g. `imtarget05/apexinspect-ai` | Only for HF Space auto-deploy |
-| `GROQ_API_KEY` | Runtime | [console.groq.com](https://console.groq.com) → set in the HF Space / `.env`, **not** in GitHub | Only when running the app with live LLM |
+| `RENDER_API_KEY` | Secret | [dashboard.render.com/u/settings#api-keys](https://dashboard.render.com/u/settings#api-keys) | Only for explicit Render deploy trigger |
+| `RENDER_DEPLOY_HOOK_URL` | Secret | Render → Service → Settings → Deploy Hook | Optional (alternative to API key) |
+| `RENDER_SERVICE_ID` | Variable | Render → Service → Settings → Service ID (`srv-…`) | Only with the API-key path |
+| `DATABASE_URL` | Runtime | [neon.tech](https://neon.tech) → Connection string | Set on **Render**, never in GitHub |
+| `GROQ_API_KEY` | Runtime | [console.groq.com](https://console.groq.com) | Set on **Render**, never in GitHub |
+| `API_KEY` | Runtime | Self-chosen, unlocks `POST /api/v1/mes/action` | Set on **Render**, never in GitHub |
 
-The optional Hugging Face deploy job skips gracefully (exit 0) when `HF_TOKEN` / `HF_SPACE` are not configured, so the pipeline stays green out of the box.
+The Render deploy job skips gracefully (exit 0) when no hook/API key is configured — Render's own
+`autoDeploy: true` still ships every push to `main`, so the pipeline stays green out of the box.
+
+ Full step-by-step runbook: [`deploy/README.md`](deploy/README.md)
 
 ## 📂 Project Structure
 
 ```text
 ApexInspect-AI/
-├── Dockerfile                  # Container definition for Hugging Face Spaces
+├── Dockerfile                  # Container definition for the Render Web Service (API)
 ├── requirements.txt            # Minimal, pinned dependencies (including pymodbus)
 ├── .github/workflows/          # CI/CD pipelines (ci.yml, cd.yml)
 ├── data/
@@ -244,13 +249,15 @@ ApexInspect-AI/
 │   └── MODEL_CARD.md           # Provenance, IO shapes, thresholds, evidence
 ├── notebooks/                  # Colab notebook only (frozen evidence of the run)
 ├── scripts/                    # Ops: dataset → DB ingest, gallery rebuild, verification
+├── dashboard/                  # Static operator dashboard (Render Static Site: HTML/CSS/JS, no build)
+├── deploy/                     # Runbook (deploy/README.md) — Render + Neon + Groq free tier
 ├── src/
 │   ├── vision/                 # ONNX Runtime detector, SAHI High-Res patching, RTSP stream
 │   ├── industrial/             # Modbus TCP PLC Bridge & Virtual PLC Simulator Server
 │   ├── agent/                  # LangGraph StateGraph, HITL interrupt/resume, BM25 RAG
 │   ├── backend/                # InspectionService, FastAPI Gateway & AuditLog models
-│   └── ui/                     # Streamlit multi-tab operator console
-└── tests/                      # 61 Unit and integration test suite (100% PASS)
+│   └── ui/                     # Streamlit console — LOCAL/Docker only (not deployed)
+└── tests/                      # Unit and integration test suite (100% PASS)
 ```
 
 ## 📄 License

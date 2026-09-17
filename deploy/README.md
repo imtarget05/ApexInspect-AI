@@ -42,8 +42,8 @@ Khai báo hạ tầng bằng code: `render.yaml` (Blueprint) trong repo — vali
 
 - `apexinspect-api` — Docker (`./Dockerfile`), plan **free**, region **frankfurt**,
   `healthCheckPath: /health`, `autoDeploy: true` (push main tự deploy).
-- `apexinspect-dashboard` — `runtime: static`, `staticPublishPath: ./dashboard`,
-  `buildCommand: "echo static"` (không có build step).
+- `apexinspect-dashboard` — `type: static_site`, `staticPublishPath: ./dashboard`,
+  `buildCommand: ""` (không có build step — Render phục vụ file tĩnh trực tiếp).
 
 CD (`.github/workflows/cd.yml`, job `deploy-render-api`) trigger deploy tường minh —
 Secrets/Vars cần trên GitHub → Settings → Secrets and variables → Actions:
@@ -87,24 +87,36 @@ Dashboard cung cấp 4 chức năng vận hành:
 > Giao diện đầy đủ (Live Feed camera sim + đồ thị Plotly) vẫn có ở `src/ui/app.py`
 > khi chạy local/Docker: `streamlit run src/ui/app.py`.
 
-## Bước 5 — Smoke test sau deploy
+## Bước 5 — Smoke test sau deploy (đã chạy ✅ ngày 2026-09-17)
 
 ```bash
 # API
 curl -fsS https://apexinspect-api.onrender.com/health
+# → {"status":"ok","service":"apexinspect-gateway","version":"1.0.0"}
+
 curl -fsS -X POST https://apexinspect-api.onrender.com/api/v1/inspections \
   -H 'Content-Type: application/json' \
   -d '{"line_id":"SMT-LINE-01","is_defective":true,"defect_classes":["short_circuit"],"confidence_scores":[0.94],"bounding_boxes":[[160,220,240,280]],"inference_time_ms":25.0}'
-# Kết quả mong đợi: {"inspection_id":"INSP-...","status":"RECORDED",...}
+# → {"inspection_id":"INSP-...","status":"RECORDED","incident_triggered":false,"ticket_id":null}
 
-# Dashboard
-curl -fsS -o /dev/null -w '%{http_code}\n' https://apexinspect-dashboard.onrender.com/
-# Kết quả mong đợi: 200
-
-# UI: mở https://apexinspect-dashboard.onrender.com → nhập X-API-KEY → gửi inspection mẫu → xem ticket.
+# Dashboard (static assets)
+for p in / /styles.css /app.js; do
+  curl -sS -o /dev/null -w "$p %{http_code}\n" https://apexinspect-dashboard.onrender.com$p
+done
+# → / 200, /styles.css 200, /app.js 200
 ```
 
-Xác nhận dữ liệu: query Neon (SQL Editor) thấy row mới trong `inspections`.
+Bằng chứng E2E đã kiểm chứng trên hạ tầng thật:
+
+| Bước | Kết quả |
+|---|---|
+| CORS preflight từ `https://apexinspect-dashboard.onrender.com` | `200` + `access-control-allow-origin: https://apexinspect-dashboard.onrender.com` |
+| 3 inspection lỗi liên tiếp | ticket `TICK-20260917-52EE`, `incident_triggered: true` (agent LangGraph + Groq chạy) |
+| `POST /mes/action` **không** có `X-API-KEY` | `401 Missing required 'X-API-KEY' authentication header.` |
+| `POST /mes/action` có `X-API-KEY` | `200 EXECUTED`, `plc_dispatched: true`, `agent_resumed: true` |
+| `GET /api/v1/tickets/recent` sau đó | ticket chuyển `APPROVED`, đọc lại được từ Neon |
+
+Xác nhận dữ liệu: query Neon (SQL Editor) thấy row mới trong `inspection_logs`.
 
 ## Troubleshooting
 

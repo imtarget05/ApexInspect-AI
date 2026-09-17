@@ -86,10 +86,16 @@ Toàn bộ hệ thống được tối ưu hóa để triển khai **hoàn toàn
 
 | Thành phần | Dịch vụ Miễn phí | Thông số kỹ thuật | Vai trò trong hệ thống |
 | :--- | :--- | :--- | :--- |
-| **Model Serving & Web UI** | **Hugging Face Spaces** | 2 vCPU, 16 GB RAM, Docker SDK | Chạy trọn gói Streamlit Dashboard, OpenCV, ONNX Runtime CPU và FastAPI Gateway. |
+| **API Gateway (FastAPI)** | **Render Web Service** | Plan `free`, 512 MB RAM, Docker runtime, region `frankfurt` | Chạy ONNX Runtime CPU detector, LangGraph incident agent, MES endpoints. Free tier sleep sau ~15 phút idle (cold start ~1 phút). |
+| **Operator Dashboard (UI)** | **Render Static Site** | Plan `free`, CDN toàn cầu, không giới hạn RAM | HTML/CSS/JS thuần trong `dashboard/`, gọi trực tiếp REST API của Gateway. Không Streamlit, không framework, không build step. |
 | **Managed Database** | **Neon PostgreSQL** | 0.5 GB Storage, Serverless Postgres | Lưu trữ bảng dữ liệu kiểm định, trạng thái dây chuyền, audit log và ticket MES. |
 | **LLM Inference** | **Groq API** | Llama 3.3 70B, 30 req/min free | Bộ não Agent phân tích nguyên nhân sự cố và tổng hợp SOP tốc độ ~300 tokens/s. |
 | **Model Weight Storage** | **GitHub Releases / Git LFS** | Băng thông miễn phí | Lưu file trọng số `yolov8n_pcb_defect.onnx` (<15 MB). |
+| **CI/CD** | **GitHub Actions + GHCR** | 2000 phút/tháng, registry free | Test suite → build/push image lên GHCR → trigger Render deploy qua API/hook. |
+
+> **Lịch sử quyết định:** phương án ban đầu dùng 2 Hugging Face Docker Space đã bị loại bỏ vì
+> HF yêu cầu gói **PRO** cho Docker/Gradio Space trên `cpu-basic` (API trả lỗi `402`).
+> Xem `deploy/README.md` và `docs/superpowers/specs/2026-09-17-static-dashboard-deploy.md`.
 
 ---
 

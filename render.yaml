@@ -26,10 +26,9 @@ services:
         sync: false
       - key: API_KEY
         sync: false
-  - type: web
+  - type: static_site
     name: apexinspect-dashboard
-    runtime: static
     autoDeploy: true
-    buildCommand: "echo static"
+    buildCommand: ""
     staticPublishPath: ./dashboard
 
