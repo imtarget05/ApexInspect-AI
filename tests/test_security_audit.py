@@ -100,30 +100,47 @@ class TestSecurityAndAudit(unittest.TestCase):
         self.assertEqual(audit_approve.source_ip, "192.168.1.100")
 
     def test_api_key_authentication_enforced(self):
-        """MES action endpoint must reject requests without valid X-API-KEY."""
+        """MES action endpoint must reject requests without valid X-API-KEY.
+
+        Deterministic: `src/backend/database.py` calls `load_dotenv()` at import,
+        nên `.env` local (nếu có `API_KEY`) sẽ lọt vào `os.environ`. Test này tự
+        set key tường minh rồi khôi phục, không phụ thuộc máy dev.
+        """
         from fastapi.testclient import TestClient
         from src.backend.main import app
 
         client = TestClient(app)
-        # 1. Missing header -> 401
-        res_no_key = client.post("/api/v1/mes/action", json={"ticket_id": "TICK-TEST", "action": "APPROVE"})
-        self.assertEqual(res_no_key.status_code, 401)
+        expected_key = "unit-test-mes-key"
+        previous = os.environ.get("API_KEY")
+        os.environ["API_KEY"] = expected_key
+        try:
+            # 1. Missing header -> 401
+            res_no_key = client.post(
+                "/api/v1/mes/action",
+                json={"ticket_id": "TICK-TEST", "action": "APPROVE"}
+            )
+            self.assertEqual(res_no_key.status_code, 401)
 
-        # 2. Invalid header -> 403
-        res_bad_key = client.post(
-            "/api/v1/mes/action",
-            json={"ticket_id": "TICK-TEST", "action": "APPROVE"},
-            headers={"X-API-KEY": "wrong-secret-key"}
-        )
-        self.assertEqual(res_bad_key.status_code, 403)
+            # 2. Invalid header -> 403
+            res_bad_key = client.post(
+                "/api/v1/mes/action",
+                json={"ticket_id": "TICK-TEST", "action": "APPROVE"},
+                headers={"X-API-KEY": "wrong-secret-key"}
+            )
+            self.assertEqual(res_bad_key.status_code, 403)
 
-        # 3. Valid header with non-existent ticket -> 404 (passed auth successfully)
-        res_valid_key = client.post(
-            "/api/v1/mes/action",
-            json={"ticket_id": "NON-EXISTENT-TICKET", "action": "APPROVE"},
-            headers={"X-API-KEY": "dev-factory-key-secret"}
-        )
-        self.assertEqual(res_valid_key.status_code, 404)
+            # 3. Valid header with non-existent ticket -> 404 (passed auth successfully)
+            res_valid_key = client.post(
+                "/api/v1/mes/action",
+                json={"ticket_id": "NON-EXISTENT-TICKET", "action": "APPROVE"},
+                headers={"X-API-KEY": expected_key}
+            )
+            self.assertEqual(res_valid_key.status_code, 404)
+        finally:
+            if previous is None:
+                os.environ.pop("API_KEY", None)
+            else:
+                os.environ["API_KEY"] = previous
 
 if __name__ == "__main__":
     unittest.main()
