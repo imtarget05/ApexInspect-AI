@@ -6,6 +6,37 @@ import datetime
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+from ..runtime_flags import is_test_process
+
+# ---------------------------------------------------------------------------
+# Runner-independent test-database guard.
+#
+# `tests/conftest.py` is a pytest-only hook, but AGENTS.md documents
+# `python3 -m unittest discover tests/` as an equally valid runner. Under that
+# runner the repo `.env` (which ships a real Neon DATABASE_URL) was loaded
+# straight into the suite, so the destructive `setUp()` in tests/test_backend.py
+# truncated PRODUCTION tables. This guard runs *before* `load_dotenv()` and
+# forces a throwaway SQLite file whenever the process is a test runner.
+# `load_dotenv()` never overrides a pre-existing environment variable, so the
+# value set here wins for the rest of the process.
+#
+# Detection is centralised in `src.runtime_flags.is_test_process` (the same
+# markers are used by the LLM guard), so the two guards cannot drift apart.
+# ---------------------------------------------------------------------------
+TEST_DATABASE_URL = os.environ.get(
+    "APEXINSPECT_TEST_DATABASE_URL", "sqlite:///./factory_test.db"
+)
+
+
+if is_test_process():
+    existing_url = os.environ.get("DATABASE_URL", "").strip()
+    if not existing_url.startswith("sqlite"):
+        print(
+            "[Database][TEST GUARD] Non-SQLite DATABASE_URL detected in a test "
+            "run -> forcing throwaway SQLite to protect remote data: "
+            f"{TEST_DATABASE_URL}"
+        )
+    os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 # Load environment variables from .env
 load_dotenv()

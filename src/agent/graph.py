@@ -9,6 +9,7 @@ from langgraph.types import interrupt, Command
 from .rag import SOPRetriever
 from .prompts import QUALITY_AGENT_SYSTEM_PROMPT
 from .subagents import SOPResearchAgent, RCAAnalysisAgent, InterventionGovernanceAgent
+from ..runtime_flags import effective_groq_key
 
 
 class AgentState(TypedDict, total=False):
@@ -38,7 +39,8 @@ class QualityIncidentAgent:
     """
 
     def __init__(self, sops_dir: str = "data/sops"):
-        self.groq_api_key = os.getenv("GROQ_API_KEY", "").strip()
+        # Key comes from the runtime gate so test runners never dial the live LLM.
+        self.groq_api_key = effective_groq_key().strip()
         self.model_name = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
         self.sop_agent = SOPResearchAgent(sops_dir=sops_dir)
         self.rca_agent = RCAAnalysisAgent(groq_api_key=self.groq_api_key, model_name=self.model_name)

@@ -3,13 +3,15 @@
 import os
 from typing import Dict, Any, List
 from ..prompts import QUALITY_AGENT_SYSTEM_PROMPT
+from ...runtime_flags import effective_groq_key
 
 
 class RCAAnalysisAgent:
     """Specialist sub-agent for 5-Whys & Root Cause Analysis (RCA) synthesis."""
 
     def __init__(self, groq_api_key: str = "", model_name: str = "openai/gpt-oss-120b"):
-        self.groq_api_key = groq_api_key or os.getenv("GROQ_API_KEY", "").strip()
+        # Key comes from the runtime gate so test runners never dial the live LLM.
+        self.groq_api_key = (groq_api_key or effective_groq_key()).strip()
         self.model_name = model_name or os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
 
     def run(self, state: Dict[str, Any]) -> Dict[str, Any]:

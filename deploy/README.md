@@ -73,10 +73,11 @@ Python phía client. Render tự publish thư mục này lên CDN mỗi lần pu
 
 | Trường | Giá trị |
 |---|---|
-| API Base URL | `https://apexinspect-api.onrender.com` (mặc định sẵn) |
-| X-API-KEY | khớp `API_KEY` trên Render — **chỉ dùng cho thao tác MES approve/reject** |
+| API Base URL | `https://apexinspect-api.onrender.com` (đã là mặc định trong `app.js`) |
+| X-API-KEY | khớp `API_KEY` trên Render — xem **Bước 6** để lấy/xoay key |
 
-Cả hai lưu trong `localStorage` của trình duyệt, **không bao giờ commit vào repo**.
+Cả hai lưu trong `localStorage` của trình duyệt (`apex_api_base`, `apex_api_key`),
+**không bao giờ commit vào repo**. Key chỉ cần cho thao tác MES approve/reject.
 
 Dashboard cung cấp 4 chức năng vận hành:
 1. Health banner (tự phát hiện Render đang sleep)
@@ -106,17 +107,60 @@ done
 # → / 200, /styles.css 200, /app.js 200
 ```
 
-Bằng chứng E2E đã kiểm chứng trên hạ tầng thật:
+Bằng chứng E2E đã kiểm chứng trên hạ tầng thật (chạy lại toàn bộ ngày 2026-09-17 sau khi xoay `API_KEY`):
 
-| Bước | Kết quả |
+| Bước | Kết quả thực đo |
 |---|---|
-| CORS preflight từ `https://apexinspect-dashboard.onrender.com` | `200` + `access-control-allow-origin: https://apexinspect-dashboard.onrender.com` |
-| 3 inspection lỗi liên tiếp | ticket `TICK-20260917-52EE`, `incident_triggered: true` (agent LangGraph + Groq chạy) |
+| `GET /health` (sau cold start) | `200 {"status":"ok","service":"apexinspect-gateway","version":"1.0.0"}` |
+| CORS preflight từ `https://apexinspect-dashboard.onrender.com` | `200` + `access-control-allow-origin: https://apexinspect-dashboard.onrender.com` + `access-control-allow-headers: content-type,x-api-key` |
+| Static assets `/`, `/styles.css`, `/app.js` | `200`, content-type `text/html` / `text/css` / `application/javascript` |
+| 3 inspection lỗi liên tiếp khi **không** có ticket pending | `incident_triggered: true`, ticket `TICK-20260917-B517` (`severity=CRITICAL`, `action_type=HALT_LINE`, `root_cause_analysis` dài 1329 ký tự, `thread_id` đã set) |
+| Inspection tiếp theo khi đã có ticket pending | `incident_triggered: false` — đúng logic chống tạo ticket trùng |
 | `POST /mes/action` **không** có `X-API-KEY` | `401 Missing required 'X-API-KEY' authentication header.` |
-| `POST /mes/action` có `X-API-KEY` | `200 EXECUTED`, `plc_dispatched: true`, `agent_resumed: true` |
-| `GET /api/v1/tickets/recent` sau đó | ticket chuyển `APPROVED`, đọc lại được từ Neon |
+| `POST /mes/action` với key **sai** | `403 Invalid 'X-API-KEY' credential.` |
+| `POST /mes/action` với key **đúng** | `200 {"status":"EXECUTED","plc_dispatched":true,"ticket_id":"TICK-20260917-B517"}` |
+| `GET /api/v1/lines/SMT-LINE-01/metrics` sau HALT | `status: HALTED`, dữ liệu đọc lại được từ Neon |
+| Test suite local | `87 passed` (`.venv/bin/python -m pytest tests/ -q`, exit 0 — 2 lần chạy độc lập; `unittest discover` cũng xanh nhờ DB guard) |
 
-Xác nhận dữ liệu: query Neon (SQL Editor) thấy row mới trong `inspection_logs`.
+> **Hạn chế đã biết (đo được, không phải giả định):** `agent_resumed` trả `false` khi container API đã
+> restart/redeploy giữa lúc tạo ticket và lúc supervisor approve — vì LangGraph dùng `MemorySaver`
+> (checkpoint trong RAM, mất khi process chết). Khi tạo và approve trong **cùng** một process, giá trị là
+> `true`. Hành vi này nằm trong `InspectionService.resolve_ticket` (`try/except` + audit log ghi
+> `AgentResumed=...`), không phải lỗi deploy: ticket, audit trail và lệnh PLC vẫn thực thi đúng.
+> Muốn state HITL sống qua restart thì cần checkpointer bền vững (Postgres/Redis) — ngoài phạm vi bản free-tier này.
+
+## Bước 6 — Xoay / lấy `API_KEY` cho dashboard
+
+`API_KEY` là **credential duy nhất** bảo vệ `POST /api/v1/mes/action` (lệnh HALT_LINE/ROUTE_REWORK
+ra PLC thật). Vì vậy giá trị mặc định yếu trong code (`dev-factory-key-secret`) **không dùng** ở production.
+
+- Giá trị production hiện tại: đặt trên Render (Environment → `API_KEY`) **và** ghi trong file `.env`
+  local (đã gitignore) dưới cùng tên `API_KEY` — đọc bằng `grep '^API_KEY=' .env` trên máy bạn.
+- Không commit key, không dán vào issue/chat. Xoay định kỳ:
+
+```bash
+# 1) sinh key mới (không in ra màn hình)
+NEW=$(python3 -c "import secrets; print('apex-mes-' + secrets.token_urlsafe(32))")
+
+# 2) cập nhật Render (giữ nguyên các biến khác)
+curl -fsS -X PUT \
+  -H "Authorization: Bearer $RENDER_API_KEY" -H 'Content-Type: application/json' \
+  https://api.render.com/v1/services/srv-daluk7vqj5pc73dmfr6g/env-vars \
+  -d "[{\"key\":\"APP_MODE\",\"value\":\"api\"},
+       {\"key\":\"DATABASE_URL\",\"value\":\"$DATABASE_URL\"},
+       {\"key\":\"GROQ_API_KEY\",\"value\":\"$GROQ_API_KEY\"},
+       {\"key\":\"API_KEY\",\"value\":\"$NEW\"}]"
+
+# 3) Render KHÔNG tự redeploy khi đổi env qua API — trigger tường minh rồi chờ status=live
+curl -fsS -X POST -H "Authorization: Bearer $RENDER_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"clearCache":"do_not_clear"}' \
+  https://api.render.com/v1/services/srv-daluk7vqj5pc73dmfr6g/deploys
+
+# 4) cập nhật .env local để dev/dashboard khớp
+```
+
+> ⚠️ Bắt buộc bước 3: cập nhật env var qua API **không** tự tạo deploy, service vẫn chạy key cũ
+> cho tới khi redeploy (đã gặp thật: `403` dù đã PUT, sau khi deploy lại mới `200`).
 
 ## Troubleshooting
 
@@ -125,8 +169,9 @@ Xác nhận dữ liệu: query Neon (SQL Editor) thấy row mới trong `inspect
 | API cold-start chậm/timeout lần đầu | Render free sleep sau 15' idle | chờ ~1 phút, retry (dashboard báo rõ trên banner) |
 | API 500 khi POST inspection | `DATABASE_URL` sai/thiếu | kiểm tra env vars Render + logs |
 | RCA fallback (không LLM) | thiếu `GROQ_API_KEY` | thêm env var (agent vẫn chạy) |
-| `mes/action` 401 | sai `X-API-KEY` | so khớp `API_KEY` Render, nhập lại ở mục Cấu hình |
-| `mes/action` 403 | key đúng format nhưng sai giá trị | như trên |
+| `mes/action` 401 | thiếu header / chưa nhập key ở mục Cấu hình | nhập `X-API-KEY` rồi Lưu |
+| `mes/action` 403 sau khi vừa đổi `API_KEY` | đổi env qua API **không** tự redeploy | trigger deploy tường minh rồi chờ `live` (Bước 6, cảnh báo ⚠️) |
+| `agent_resumed: false` khi approve | container đã restart sau lúc tạo ticket → mất checkpoint RAM | đúng hành vi `MemorySaver` (xem ghi chú Bước 5), không phải lỗi deploy |
 | Dữ liệu mất sau restart | SQLite thay vì Neon | đặt `DATABASE_URL` (Bước 1) |
 | Dashboard trắng / fetch fail | API chưa thức hoặc base URL sai | kiểm tra banner + `localStorage.apex_api_base` |
 | Tạo HF Docker Space báo 402 | HF yêu cầu PRO cho Docker | đúng — không dùng HF nữa |

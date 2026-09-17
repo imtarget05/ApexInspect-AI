@@ -1,11 +1,3 @@
----
-title: ApexInspect AI — Smart Factory Quality Platform
-emoji: 🏭
-colorFrom: blue
-colorTo: gray
-pinned: false
----
-
 <div align="center">
   <h1>🏭 ApexInspect AI — Autonomous Industrial Vision & Quality Agent</h1>
   <p><strong>Smart Factory Vision Inspection with ONNX Edge Inference, SOP RAG & Human-In-The-Loop Governance</strong></p>
@@ -17,11 +9,11 @@ pinned: false
   [![LangGraph](https://img.shields.io/badge/LangGraph-000000?style=flat-square&logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/)
   [![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io/)
   [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)](https://docker.com)
-  [![Tests](https://img.shields.io/badge/Tests-71%20passed-success?style=flat-square)](#)
+  [![Tests](https://github.com/imtarget05/ApexInspect-AI/actions/workflows/ci.yml/badge.svg?branch=main&label=tests)](https://github.com/imtarget05/ApexInspect-AI/actions/workflows/ci.yml)
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
-  [![CI](https://github.com/imtarget05/Harness-of-Target/actions/workflows/ci.yml/badge.svg)](https://github.com/imtarget05/Harness-of-Target/actions/workflows/ci.yml)
-  [![CD](https://github.com/imtarget05/Harness-of-Target/actions/workflows/cd.yml/badge.svg)](https://github.com/imtarget05/Harness-of-Target/actions/workflows/cd.yml)
+  [![CI](https://github.com/imtarget05/ApexInspect-AI/actions/workflows/ci.yml/badge.svg)](https://github.com/imtarget05/ApexInspect-AI/actions/workflows/ci.yml)
+  [![CD](https://github.com/imtarget05/ApexInspect-AI/actions/workflows/cd.yml/badge.svg)](https://github.com/imtarget05/ApexInspect-AI/actions/workflows/cd.yml)
 </div>
 
 ---
@@ -32,7 +24,7 @@ Core workflow: `Inspect → Detect → Diagnose → Propose → Human Approve �
 
 ## ✨ Key Technical Highlights
 
-1. **High-Throughput Edge Inference (ONNX Runtime + SAHI Patching)**: Exported YOLOv8 defect detection model optimized via ONNX Runtime CPU. Measured on Apple M-series local hardware: **43.4 ms/frame avg (23.0 FPS)** across 20 steady-state inferences (see `benchmark_results.json`). Includes Sliced Automated Hyper Inference (`HighResPatchInferencer`) with NMS merging for microscopic PCB defects on high-res 4K AOI images. Production target: ≤35 ms/frame on cloud 2-vCPU deployment.
+1. **Edge Inference (ONNX Runtime + SAHI Patching)**: Exported YOLOv8 defect detection model running via ONNX Runtime CPU. The saved local benchmark records **43.36 ms average latency (23.1 FPS)** on Apple M-series macOS, using synthetic PCB frames with model input `[1, 3, 640, 640]`, 20 measurements after 5 warm-up runs (see `benchmark_results.json`). The project also includes `HighResPatchInferencer` with NMS merging; this benchmark does not establish 4K patching or end-to-end throughput. Production target: ≤35 ms on cloud 2-vCPU, not yet verified as achieved.
 2. **Industrial OT & Modbus TCP PLC Bridge**: Native Modbus TCP client (`PLCBridge`) and Virtual Modbus Server (`VirtualModbusServer`) to directly control conveyor interlocks, pneumatic reject diverters, and andon tower lights (Red/Yellow/Green).
 3. **Zero-Hallucination IPC-A-610 SOP Knowledge Retrieval**: Okapi BM25 Hybrid RAG engine with domain-specific synonym expansion indexing standard operating procedures including IPC-A-610 Class 3 solder criteria, thermal reflow profile drift (TAL/PWI), and pick & place nozzle maintenance.
 4. **Deterministic Human-In-The-Loop (HITL) Safety & Audit Trail**: LangGraph `MemorySaver` + `interrupt()` and `Command(resume=...)` primitives with dynamic thread IDs. Factory-floor actions strictly require supervisor sign-off and are recorded into an immutable `AuditLog` table.
@@ -75,63 +67,47 @@ flowchart TD
 
 ## 📊 Benchmark & Performance
 
-Measured on Apple M-series local hardware (macOS, ONNX Runtime 1.30.0, 640×640 synthetic PCB frame input via `PCBCameraSimulator`):
+> Source of truth: `benchmark_results.json` (measured 2026-09-17 01:14:20). All numbers in this section are copied from that file.
+
+Measured on Apple M-series (local macOS) with ONNX Runtime 1.30.0, using synthetic PCB frames via `PCBCameraSimulator` and model input `[1, 3, 640, 640]`: 20 measurements after 5 warm-up runs.
 
 | Metric | Value |
 | :--- | :--- |
-| Model | `yolov8n_pcb_defect.onnx` (~12 MB) |
+| Model | `yolov8n_pcb_defect.onnx` |
 | Input shape | `[1, 3, 640, 640]` |
 | Output shape | `[1, 10, 8400]` |
 | Warmup runs | 5 |
 | Measured runs | 20 |
-| **Avg latency** | **43.4 ms** |
-| Min latency | 42.0 ms |
-| Max latency | 46.3 ms |
-| **Throughput** | **23.0 FPS** |
+| **Avg latency** | **43.36 ms** |
+| Min latency | 42.1 ms |
+| Max latency | 50.17 ms |
+| **Throughput** | **23.1 FPS** |
 | Confidence threshold | 0.50 |
 | Hardware | Apple M-series (local macOS) |
+| ONNX Runtime | 1.30.0 |
 
-> **Note**: This is a local macOS measurement. Production target is ≤35 ms/frame on cloud 2-vCPU deployment. Per-frame `inference_time_ms` is recorded in the database on every inspection (`architecture.md:84`) for real-world latency tracking.
+> **Scope note**: This is a local macOS measurement. The production target of ≤35 ms/frame on cloud 2-vCPU is **not yet verified as achieved**. This micro-benchmark does not establish 4K SAHI patching or end-to-end pipeline throughput. Per-frame `inference_time_ms` is recorded in the database on every inspection for real-world latency tracking.
 
 Run the benchmark yourself:
+
 ```bash
 python scripts/benchmark_inference.py
 ```
 
-Check against target (≤35ms trên cloud 2-vCPU):
+Check against target (≤35 ms on cloud 2-vCPU):
+
 ```bash
 python scripts/check_benchmark_target.py
 ```
 
-### Benchmark in CI
+### Local measurement vs cloud target
 
-Mỗi CI run tự động:
-1. Chạy `scripts/check_benchmark_target.py` (target 35ms, hard-fail threshold 15ms)
-2. Upload `benchmark_results.json` như artifact (giữ 30 ngày)
+| Metric | Local macOS measurement | Cloud 2-vCPU target |
+| :--- | :--- | :--- |
+| Source | `benchmark_results.json` (2026-09-17 01:14:20) | No cloud measurement verified |
+| Latency / FPS | **43.36 ms / 23.1 FPS** | **≤35 ms**, not yet verified as achieved |
 
-**PR Gate**: Nếu benchmark đo được > 50ms (35ms target + 15ms threshold), CI Fail và block merge.
-Đây là hard gate để ngăn regression inference performance.
-
-Xem artifact: GitHub → Actions → chọn run → Artifacts → `benchmark-results`.
-
-> **Lưu ý**: Benchmark CI chạy trên ubuntu-latest (x86_64 cloud), không phải local macOS. Kết quả có thể khác biệt.
-> Để strict hơn (block mọi trường hợp > 35ms), đổi `--warn-delta 15.0` thành `--warn-delta 0.0` trong `ci.yml`.
-
-### Benchmark Comparison: Local macOS vs Cloud Target
-
-| Metric | Local macOS (M-series) | Cloud 2-vCPU Target | Notes |
-| :--- | :--- | :--- | :--- |
-| **Model** | `yolov8n_pcb_defect.onnx` | `yolov8n_pcb_defect.onnx` | 동일 model |
-| **ONNX Runtime** | 1.30.0 | 1.x (ubuntu-latest) | CI dùng verson khác |
-| **Hardware** | Apple M-series (8-core) | Ubuntu x86_64 (2 vCPU) | Khác architecture |
-| **Input** | 640×640 synthetic PCB | 640×640 synthetic PCB | 동일 input |
-| **Target latency** | N/A (local 측정) | **≤35.0 ms** | Production NFR |
-| **Measured latency** | **43.4 ms** (ứng với ~23 FPS) | Chưa đo đạc thực tế trên cloud | Cần benchmark cloud thật |
-| **Delta vs target** | N/A (local) | **+8.4 ms** (nếu local representative) | Chưa xác nhận |
-| **Status** | PASS local (không gate) | Pending cloud benchmark | CI gate threshold 15ms |
-
-> **Kết luận tạm**: Local macOS đo 43.4ms — chưa đạt target 35ms nhưng within 15ms threshold (hard gate CI).
-> Cần benchmark trên cloud 2-vCPU thật để xác nhận apakah production đạt target.
+**CI scope:** `.github/workflows/ci.yml` runs pytest and a Docker build smoke test. It does **not** run a latency gate or block PRs based on a >50 ms benchmark result.
 
 ## 🏗️ Architecture Decision Records (ADR)
 
@@ -160,7 +136,7 @@ Metrics nào giảm sát khi line dừng:
 
 ## ⚠️ Limitations
 
-1. **Inference speed**: 43.4 ms/frame trên local macOS — chưa đạt 35ms target. Cần benchmark trên cloud 2-vCPU thật để verify.
+1. **Inference speed**: 43.36 ms/frame (saved benchmark) trên local macOS — chưa đạt 35ms target. Cần benchmark trên cloud 2-vCPU thật để verify.
 2. **BM25 RAG**: không semantic, phụ thuộc synonym map thủ công. Không scale với corpus lớn.
 3. **Modbus TCP**: không encrypt/auth built-in — cần network-level security.
 4. **Virtual PLC simulator**: không mimic real hardware timing/error behavior.
@@ -172,8 +148,8 @@ Metrics nào giảm sát khi line dừng:
 ### 1. Clone & Setup Environment
 
 ```bash
-git clone https://github.com/imtarget05/Harness-of-Target.git
-cd Harness-of-Target
+git clone https://github.com/imtarget05/ApexInspect-AI.git
+cd ApexInspect-AI
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -198,6 +174,12 @@ Open `http://localhost:8501` to view the live line inspection stream and inciden
 ## 🧪 Testing
 
 The test suite covers the full pipeline (vision simulator + ONNX detector, FastAPI ingestion + MES tickets, SOP RAG + LangGraph agent) and runs entirely offline:
+
+Latest verified local run (2026-09-17, `.venv/bin/python -m pytest tests/ -q`): **87 passed, 1 warning**, exit code 0, repeated twice back-to-back. The suite is green under both documented runners.
+
+**Resolved defect — destructive test runs against the production database.** `tests/conftest.py` is a pytest-only hook, but this repo documents `python3 -m unittest discover tests/` as a co-equal runner. Under that runner `conftest.py` was never loaded, so `src/backend/database.py`'s `load_dotenv()` bound the suite to the real Neon `DATABASE_URL` from `.env`. The destructive `setUp()` in `tests/test_backend.py` then truncated production tables — the 2026-09-16 production wipe, 105s runtimes, and the SQLAlchemy `ObjectDeletedError` on `test_record_inspection_triggers_incident_on_yield_rate_drift` all trace to this single cause. Fixed by a runner-independent guard in `src/backend/database.py` that runs **before** `load_dotenv()` and forces a throwaway SQLite file whenever the process is a test runner (detection centralised in `src/runtime_flags.is_test_process`, shared with the LLM guard so the two cannot drift: `pytest in sys.modules`, `PYTEST_CURRENT_TEST`, or `__main__.__file__` ending in `unittest/__main__.py|main.py` / `pytest/__main__.py`). Production entrypoints (uvicorn, streamlit, scripts) keep their own `DATABASE_URL`. Regression tests: `tests/test_db_guard.py` (runs both runners in a subprocess against an unreachable simulated production URL) plus `tests/test_db_isolation.py`.
+
+A second defect — ordinary unit tests made **live HTTPS calls to `api.groq.com`** (socket probe: 9 external connects; suite took 49.61s on one run vs 7.35s on the next) — is fixed by the same gate: `src/runtime_flags.effective_groq_key()` returns an empty key inside test runners, so `RCAAnalysisAgent` and `QualityIncidentAgent` take the existing deterministic RCA fallback. Opt in explicitly with `APEX_ALLOW_LIVE_LLM=1`. Regression tests: `tests/test_llm_guard.py`.
 
 ```bash
 python -m pytest tests/ -q
@@ -257,7 +239,7 @@ ApexInspect-AI/
 │   ├── agent/                  # LangGraph StateGraph, HITL interrupt/resume, BM25 RAG
 │   ├── backend/                # InspectionService, FastAPI Gateway & AuditLog models
 │   └── ui/                     # Streamlit console — LOCAL/Docker only (not deployed)
-└── tests/                      # Unit and integration test suite (100% PASS)
+└── tests/                      # Unit and integration tests; latest result above
 ```
 
 ## 📄 License
