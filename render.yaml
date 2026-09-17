@@ -1,0 +1,27 @@
+# ── Render free-tier deploy ( Blueprint ) ─────────────────────────────
+# API chạy Docker image của repo (plan free, region frankfurt gần VN/EU).
+# UI chạy riêng trên Streamlit Community Cloud (BACKEND_URL -> API này).
+services:
+  - type: web
+    name: apexinspect-api
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true
+    # Biến môi trường trên dashboard Render (Secrets — KHÔNG commit giá trị):
+    #   APP_MODE     = api
+    #   DATABASE_URL = <Neon connection string>
+    #   GROQ_API_KEY = <Groq key>
+    #   API_KEY      = <API key cho MES actions>
+    envVars:
+      - key: APP_MODE
+        value: api
+      - key: DATABASE_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: API_KEY
+        sync: false
