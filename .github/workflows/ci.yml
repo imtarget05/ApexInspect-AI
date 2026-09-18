@@ -38,6 +38,12 @@ jobs:
       - name: Run test suite (vision simulator + detector, FastAPI ingestion, LangGraph agent)
         run: python -m pytest tests/ -q --tb=short
 
+      # Plan 2026-09-18 safety gates: simulation-only PLC honesty, idempotent
+      # approval-to-actuation, and persistent approval-resume. These fail the
+      # build if a hardware write can ever be reported as success.
+      - name: Safety gates (PLC honesty / idempotent actuation / persistent approval)
+        run: python -m pytest tests/test_plc_bridge.py tests/test_approval_safety.py tests/test_agent.py tests/test_backend.py tests/test_llm_guard.py -q --tb=short
+
   docker-build:
     name: Docker — image build smoke test
     runs-on: ubuntu-latest

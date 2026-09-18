@@ -31,6 +31,13 @@ factory.db
 
 # Logs & OS
 *.log
+logs/
+tmp/
+temp/
+*.tmp
+*.temp
+*.pkl
+*.pkl.tmp-*
 .DS_Store
 Thumbs.db
 

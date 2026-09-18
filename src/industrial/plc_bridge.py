@@ -35,14 +35,21 @@ class PLCBridge:
         host: Optional[str] = None,
         port: Optional[int] = None,
         timeout: float = 1.0,
-        simulation_fallback: bool = True
+        simulation_fallback: bool = True,
+        mode: Optional[str] = None,
     ):
         self.host = host or os.getenv("PLC_HOST", "127.0.0.1")
         self.port = int(port or os.getenv("PLC_PORT", "5020"))
         self.timeout = timeout
+        # ``simulation_fallback`` remains accepted for callers using the old
+        # constructor, but it can never turn a failed hardware write into a
+        # simulated success.  Explicit hardware mode is opt-in.
         self.simulation_fallback = simulation_fallback
+        configured_mode = mode or os.getenv("APEX_PLC_MODE", "simulation")
+        self.mode = self._parse_mode(configured_mode)
         self.client: Optional[Any] = None
         self._is_hardware_connected = False
+        self._hardware_unavailable_reason = "SIMULATION_MODE"
 
         # Internal simulated memory state for offline fallback & testing
         self._simulated_coils = {
@@ -60,21 +67,38 @@ class PLCBridge:
             self.REG_LAST_DEFECT_CODE: 0,
         }
 
-        self.connect()
+        if self.mode == "HARDWARE":
+            self.connect()
+
+    @staticmethod
+    def _parse_mode(value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized in {"SIMULATION", "SIMULATED"}:
+            return "SIMULATION"
+        if normalized == "HARDWARE":
+            return "HARDWARE"
+        raise ValueError("APEX_PLC_MODE must be 'simulation' or 'hardware'")
 
     def connect(self) -> bool:
         """Attempts to connect to the Modbus TCP PLC server."""
+        if self.mode != "HARDWARE":
+            self._is_hardware_connected = False
+            self._hardware_unavailable_reason = "SIMULATION_MODE"
+            return False
         if not PYMODBUS_AVAILABLE:
             self._is_hardware_connected = False
+            self._hardware_unavailable_reason = "PYMODBUS_UNAVAILABLE"
             return False
 
         try:
             self.client = ModbusTcpClient(self.host, port=self.port, timeout=self.timeout)
             connected = self.client.connect()
             self._is_hardware_connected = bool(connected)
+            self._hardware_unavailable_reason = None if connected else "PLC_UNAVAILABLE"
             return self._is_hardware_connected
-        except Exception:
+        except Exception as exc:
             self._is_hardware_connected = False
+            self._hardware_unavailable_reason = f"PLC_CONNECTION_ERROR: {exc}"
             return False
 
     def disconnect(self) -> None:
@@ -89,25 +113,64 @@ class PLCBridge:
     @property
     def is_connected(self) -> bool:
         """Returns True if connected to real PLC hardware or server."""
+        if self.mode != "HARDWARE":
+            return False
         if self.client and hasattr(self.client, "connected"):
             return bool(self.client.connected)
         return self._is_hardware_connected
+
+    def _result(self, action: str, line_id: str, status: str, **details: Any) -> Dict[str, Any]:
+        return {
+            "action": action,
+            "line_id": line_id,
+            "mode": self.mode,
+            "status": status,
+            "hardware_connected": self.is_connected,
+            **details,
+        }
+
+    @staticmethod
+    def _write_succeeded(response: Any) -> bool:
+        """Modbus writes must acknowledge success; an error response is a failure."""
+        return response is not None and not (
+            hasattr(response, "isError") and response.isError()
+        )
+
+    def _write_coils(self, writes: tuple[tuple[int, bool], ...]) -> bool:
+        """Write a command sequence, stopping immediately when the PLC rejects one coil."""
+        for address, value in writes:
+            if not self._write_succeeded(self.client.write_coil(address, value)):
+                return False
+        return True
+
+    def _hardware_unavailable_result(self, action: str, line_id: str) -> Dict[str, Any]:
+        return self._result(
+            action,
+            line_id,
+            "FAILED",
+            error="PLC_UNAVAILABLE",
+            hardware_unavailable_reason=self._hardware_unavailable_reason,
+        )
 
     def halt_line(self, line_id: str = "SMT-LINE-01") -> Dict[str, Any]:
         """
         Commands the PLC to immediately cut power to the conveyor motor and engage RED tower light.
         """
-        success = True
-        # Hardware write if connected
-        if self.is_connected:
+        if self.mode == "HARDWARE":
+            if not self.is_connected:
+                return self._hardware_unavailable_result("HALT_LINE", line_id)
             try:
-                self.client.write_coil(self.COIL_HALT_LINE, True)
-                self.client.write_coil(self.COIL_CONVEYOR_RUN, False)
-                self.client.write_coil(self.COIL_TOWER_RED, True)
-                self.client.write_coil(self.COIL_TOWER_GREEN, False)
-                self.client.write_coil(self.COIL_TOWER_YELLOW, False)
-            except Exception as e:
-                success = False
+                writes = (
+                    (self.COIL_HALT_LINE, True),
+                    (self.COIL_CONVEYOR_RUN, False),
+                    (self.COIL_TOWER_RED, True),
+                    (self.COIL_TOWER_GREEN, False),
+                    (self.COIL_TOWER_YELLOW, False),
+                )
+                if not self._write_coils(writes):
+                    return self._result("HALT_LINE", line_id, "FAILED", error="PLC_WRITE_REJECTED")
+            except Exception as exc:
+                return self._result("HALT_LINE", line_id, "FAILED", error=str(exc))
 
         # Update local / simulated state
         self._simulated_coils[self.COIL_HALT_LINE] = True
@@ -116,29 +179,31 @@ class PLCBridge:
         self._simulated_coils[self.COIL_TOWER_GREEN] = False
         self._simulated_coils[self.COIL_TOWER_YELLOW] = False
 
-        return {
-            "action": "HALT_LINE",
-            "line_id": line_id,
-            "status": "DISPATCHED" if (self.is_connected and success) else "SIMULATED",
-            "hardware_connected": self.is_connected,
-            "conveyor_running": False,
-            "tower_light": "RED"
-        }
+        return self._result(
+            "HALT_LINE", line_id, "DISPATCHED" if self.mode == "HARDWARE" else "SIMULATED",
+            conveyor_running=False,
+            tower_light="RED",
+        )
 
     def resume_line(self, line_id: str = "SMT-LINE-01") -> Dict[str, Any]:
         """
         Releases safety interlocks, turns GREEN tower light ON, and signals conveyor ready to run.
         """
-        success = True
-        if self.is_connected:
+        if self.mode == "HARDWARE":
+            if not self.is_connected:
+                return self._hardware_unavailable_result("RESUME_LINE", line_id)
             try:
-                self.client.write_coil(self.COIL_HALT_LINE, False)
-                self.client.write_coil(self.COIL_CONVEYOR_RUN, True)
-                self.client.write_coil(self.COIL_TOWER_RED, False)
-                self.client.write_coil(self.COIL_TOWER_YELLOW, False)
-                self.client.write_coil(self.COIL_TOWER_GREEN, True)
-            except Exception:
-                success = False
+                writes = (
+                    (self.COIL_HALT_LINE, False),
+                    (self.COIL_CONVEYOR_RUN, True),
+                    (self.COIL_TOWER_RED, False),
+                    (self.COIL_TOWER_YELLOW, False),
+                    (self.COIL_TOWER_GREEN, True),
+                )
+                if not self._write_coils(writes):
+                    return self._result("RESUME_LINE", line_id, "FAILED", error="PLC_WRITE_REJECTED")
+            except Exception as exc:
+                return self._result("RESUME_LINE", line_id, "FAILED", error=str(exc))
 
         self._simulated_coils[self.COIL_HALT_LINE] = False
         self._simulated_coils[self.COIL_CONVEYOR_RUN] = True
@@ -146,56 +211,67 @@ class PLCBridge:
         self._simulated_coils[self.COIL_TOWER_YELLOW] = False
         self._simulated_coils[self.COIL_TOWER_GREEN] = True
 
-        return {
-            "action": "RESUME_LINE",
-            "line_id": line_id,
-            "status": "DISPATCHED" if (self.is_connected and success) else "SIMULATED",
-            "hardware_connected": self.is_connected,
-            "conveyor_running": True,
-            "tower_light": "GREEN"
-        }
+        return self._result(
+            "RESUME_LINE", line_id, "DISPATCHED" if self.mode == "HARDWARE" else "SIMULATED",
+            conveyor_running=True,
+            tower_light="GREEN",
+        )
 
     def divert_rework(self, line_id: str = "SMT-LINE-01") -> Dict[str, Any]:
         """
         Actuates pneumatic diverter gate to push defective PCB onto rework conveyor.
         """
-        success = True
-        if self.is_connected:
+        if self.mode == "HARDWARE":
+            if not self.is_connected:
+                return self._hardware_unavailable_result("ROUTE_REWORK", line_id)
             try:
-                self.client.write_coil(self.COIL_REWORK_DIVERT, True)
-                self.client.write_coil(self.COIL_TOWER_YELLOW, True)
-            except Exception:
-                success = False
+                writes = (
+                    (self.COIL_REWORK_DIVERT, True),
+                    (self.COIL_TOWER_YELLOW, True),
+                )
+                if not self._write_coils(writes):
+                    return self._result("ROUTE_REWORK", line_id, "FAILED", error="PLC_WRITE_REJECTED")
+            except Exception as exc:
+                return self._result("ROUTE_REWORK", line_id, "FAILED", error=str(exc))
 
         self._simulated_coils[self.COIL_REWORK_DIVERT] = True
         self._simulated_coils[self.COIL_TOWER_YELLOW] = True
 
-        return {
-            "action": "ROUTE_REWORK",
-            "line_id": line_id,
-            "status": "DISPATCHED" if (self.is_connected and success) else "SIMULATED",
-            "hardware_connected": self.is_connected,
-            "diverter_active": True,
-            "tower_light": "YELLOW"
-        }
+        return self._result(
+            "ROUTE_REWORK", line_id, "DISPATCHED" if self.mode == "HARDWARE" else "SIMULATED",
+            diverter_active=True,
+            tower_light="YELLOW",
+        )
 
-    def update_telemetry(self, total: int, defects: int, yield_rate: float, defect_code: int = 0) -> bool:
+    def update_telemetry(self, total: int, defects: int, yield_rate: float, defect_code: int = 0) -> Dict[str, Any]:
         """Syncs real-time edge telemetry into PLC holding registers for SCADA visualization."""
         scaled_yield = max(0, min(10000, int(round(yield_rate * 100))))
-        if self.is_connected:
+        if self.mode == "HARDWARE":
+            if not self.is_connected:
+                return self._hardware_unavailable_result("UPDATE_TELEMETRY", "")
             try:
-                self.client.write_registers(
+                response = self.client.write_registers(
                     self.REG_TOTAL_INSPECTED,
                     [total, defects, scaled_yield, defect_code]
                 )
-            except Exception:
-                pass
+                if not self._write_succeeded(response):
+                    return self._result("UPDATE_TELEMETRY", "", "FAILED", error="PLC_WRITE_REJECTED")
+            except Exception as exc:
+                return self._result("UPDATE_TELEMETRY", "", "FAILED", error=str(exc))
 
         self._simulated_registers[self.REG_TOTAL_INSPECTED] = total
         self._simulated_registers[self.REG_DEFECT_COUNT] = defects
         self._simulated_registers[self.REG_YIELD_RATE] = scaled_yield
         self._simulated_registers[self.REG_LAST_DEFECT_CODE] = defect_code
-        return True
+        return self._result(
+            "UPDATE_TELEMETRY",
+            "",
+            "DISPATCHED" if self.mode == "HARDWARE" else "SIMULATED",
+            total=total,
+            defects=defects,
+            yield_rate=scaled_yield / 100,
+            defect_code=defect_code,
+        )
 
     def read_plc_status(self) -> Dict[str, Any]:
         """Reads digital outputs and telemetry from PLC or simulated memory."""
@@ -211,14 +287,16 @@ class PLCBridge:
                         "rework_divert": bool(bits[self.COIL_REWORK_DIVERT]),
                         "tower_light": "RED" if bits[self.COIL_TOWER_RED] else ("YELLOW" if bits[self.COIL_TOWER_YELLOW] else "GREEN")
                     }
-            except Exception:
-                pass
+            except Exception as exc:
+                self._hardware_unavailable_reason = f"PLC_READ_ERROR: {exc}"
 
         # Return simulated state
         coils = self._simulated_coils
         tower = "RED" if coils[self.COIL_TOWER_RED] else ("YELLOW" if coils[self.COIL_TOWER_YELLOW] else "GREEN")
         return {
             "hardware_connected": False,
+            "mode": self.mode,
+            "hardware_unavailable_reason": self._hardware_unavailable_reason,
             "conveyor_running": coils[self.COIL_CONVEYOR_RUN],
             "halt_triggered": coils[self.COIL_HALT_LINE],
             "rework_divert": coils[self.COIL_REWORK_DIVERT],

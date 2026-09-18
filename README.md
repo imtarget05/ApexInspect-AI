@@ -185,6 +185,16 @@ A second defect — ordinary unit tests made **live HTTPS calls to `api.groq.com
 python -m pytest tests/ -q
 ```
 
+## 🖥️ DEPLOYMENT CHỐT: Edge-First (Offline On-Premise)
+
+> **Deployment duy nhất: EDGE-FIRST.** YOLOv8 ONNX chạy 100% tại Edge PC công nghiệp
+> (target **≤15ms/frame**), RCA ưu tiên Local/Deterministic (Heuristic rule-based + BM25
+> inference thuần, `APEX_LLM_MODE=deterministic`). Cloud (Groq/Neon/Render) chỉ là
+> **Control Plane nhận báo cáo bất đồng bộ (async reporting only)** — không nằm luồng
+> chính, mất mạng vẫn soi Pass/Fail + dừng chuyền tại chỗ (offline 100%).
+> Training duy nhất trên Colab: Vision Transfer Learning/Finetune YOLOv8n
+> (`colab/train_yolo_T4.ipynb`, giữ nguyên). Chi tiết: `docs/DEPLOYMENT_EDGE_FIRST.md`.
+
 ## ☁️ Deployment & DevOps (CI/CD)
 
 The platform ships with a fully automated **GitHub Actions** pipeline:

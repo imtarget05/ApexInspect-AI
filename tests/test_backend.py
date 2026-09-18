@@ -2,6 +2,8 @@ import os
 import sys
 import unittest
 import uuid
+from fastapi import HTTPException
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -172,6 +174,44 @@ class TestBackendPipeline(unittest.TestCase):
 
         db_ticket = self.db.query(MESTicket).filter_by(ticket_id=test_ticket_id).first()
         self.assertEqual(db_ticket.status, "REJECTED")
+
+    def test_duplicate_resolution_returns_http_conflict(self):
+        """Changing duplicate approval into another service execution must fail this test."""
+        test_ticket_id = f"TICK-TEST-DUP-{uuid.uuid4().hex[:6]}"
+        self.db.add(MESTicket(
+            ticket_id=test_ticket_id, line_id="SMT-LINE-01", severity="CRITICAL",
+            trigger_reason="Test duplicate", root_cause_analysis="Test RCA",
+            recommended_sop="SOP-SMT-001", action_type="HALT_LINE", status="EXECUTED",
+        ))
+        self.db.commit()
+
+        request = ActionApprovalRequest(ticket_id=test_ticket_id, action="APPROVE", approved_by="tester")
+        with self.assertRaises(HTTPException) as raised:
+            resolve_ticket(request, db=self.db)
+
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_hardware_failure_returns_http_bad_gateway(self):
+        """Mapping an explicit PLC failure to success or 400 must fail this test."""
+        class FailingBridge:
+            @staticmethod
+            def halt_line(_line_id):
+                return {"action": "HALT_LINE", "mode": "HARDWARE", "status": "FAILED", "error": "PLC_UNAVAILABLE"}
+
+        ticket_id = f"TICK-TEST-PLC-{uuid.uuid4().hex[:6]}"
+        self.db.add(MESTicket(
+            ticket_id=ticket_id, line_id="SMT-LINE-01", severity="CRITICAL",
+            trigger_reason="Test PLC failure", root_cause_analysis="Test RCA",
+            recommended_sop="SOP-SMT-001", action_type="HALT_LINE", status="PENDING_APPROVAL",
+        ))
+        self.db.commit()
+
+        request = ActionApprovalRequest(ticket_id=ticket_id, action="APPROVE", approved_by="tester")
+        with patch("src.backend.main.plc_bridge", FailingBridge()):
+            with self.assertRaises(HTTPException) as raised:
+                resolve_ticket(request, db=self.db)
+
+        self.assertEqual(raised.exception.status_code, 502)
 
 if __name__ == "__main__":
     unittest.main()

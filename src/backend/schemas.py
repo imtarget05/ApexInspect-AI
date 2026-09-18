@@ -20,6 +20,7 @@ class ActionApprovalRequest(BaseModel):
     ticket_id: str
     action: str = Field(..., description="APPROVE or REJECT")
     approved_by: str = "supervisor_on_duty"
+    idempotency_key: Optional[str] = Field(None, max_length=128)
 
 class LineMetricsResponse(BaseModel):
     line_id: str

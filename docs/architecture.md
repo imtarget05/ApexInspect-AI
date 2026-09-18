@@ -1,5 +1,14 @@
 # Technical System Architecture: ApexInspect AI
 
+## 0. DEPLOYMENT CHỐT: Edge-First (Offline On-Premise)
+
+- **Edge inference (luồng chính, offline 100%)**: Camera → OpenCV → YOLOv8 ONNX
+  (target ≤15ms/frame tại Edge PC công nghiệp) → RCA Local/Deterministic
+  (Heuristic rule-based + BM25 inference thuần) → HITL → PLC Modbus TCP tại chỗ.
+- **Control Plane (async-only, không nằm luồng chính)**: Edge đẩy báo cáo bất đồng bộ
+  (inspections/tickets/audit) lên Cloud (Neon/Render/Groq). Mất mạng: Edge vẫn chạy đủ.
+- Training duy nhất trên Colab (Vision finetune YOLOv8n, `colab/train_yolo_T4.ipynb`).
+
 ## 1. System Topology & End-to-End Flow
 
 ```mermaid

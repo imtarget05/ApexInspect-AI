@@ -154,11 +154,16 @@ def resolve_ticket(payload: ActionApprovalRequest, db: Session = Depends(get_db)
         action=payload.action,
         approved_by=payload.approved_by or "supervisor_on_duty",
         agent=incident_agent,
-        plc_bridge=plc_bridge
+        plc_bridge=plc_bridge,
+        idempotency_key=payload.idempotency_key,
     )
 
     if result.get("status") == "ERROR":
         raise HTTPException(status_code=400, detail=result.get("message"))
+    if result.get("status") == "CONFLICT":
+        raise HTTPException(status_code=409, detail=result.get("message"))
+    if result.get("status") == "ACTUATION_FAILED":
+        raise HTTPException(status_code=502, detail=result.get("message"))
 
     return result
 

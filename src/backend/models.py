@@ -44,6 +44,9 @@ class MESTicket(Base):
     status = Column(String(20), default="PENDING_APPROVAL") # PENDING_APPROVAL, APPROVED, REJECTED, EXECUTED
     approved_by = Column(String(100), nullable=True)
     thread_id = Column(String(100), nullable=True)     # LangGraph checkpoint thread identifier
+    resolution_key = Column(String(128), nullable=True) # Supervisor idempotency key
+    plc_status = Column(String(32), nullable=True)      # DISPATCHED, SIMULATED, FAILED, NOT_DISPATCHED
+    plc_result_json = Column(Text, nullable=True)       # Structured PLC bridge result evidence
     created_at = Column(DateTime, default=utc_now)
     resolved_at = Column(DateTime, nullable=True)
 
@@ -136,4 +139,3 @@ class ModelRegistry(Base):
     corpus_version = Column(String(64), nullable=False, default="")
     status = Column(String(32), nullable=False, default="staged")
     promoted_at = Column(String(64), nullable=False, default="")
-

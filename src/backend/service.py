@@ -4,7 +4,7 @@ import json
 from collections import Counter
 from typing import Dict, Any, Tuple, Optional, List
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, update
 from sqlalchemy.exc import IntegrityError
 
 from .models import ProductionLine, InspectionLog, MESTicket, AuditLog
@@ -188,10 +188,18 @@ class InspectionService:
         if not ticket:
             return {"status": "ERROR", "message": f"Ticket {ticket_id} not found."}
 
+        action = action.upper()
+        if action not in {"APPROVE", "REJECT"}:
+            return {"status": "ERROR", "message": "action must be APPROVE or REJECT"}
+
+        now_utc = utc_now()
+        is_approved = action == "APPROVE"
+        resolution_key = idempotency_key or f"server-{uuid.uuid4().hex}"
+        idem_scope = f"mes_resolve:{ticket_id}"
+
         # Idempotency gate (Plan 03): a replayed key returns the stored
         # response without touching the ticket, agent, or PLC. Scope is
         # per-ticket so a key can never resolve a different ticket.
-        idem_scope = f"mes_resolve:{ticket_id}"
         if idempotency_key:
             prior = (
                 db.query(IdempotencyKey)
@@ -201,39 +209,90 @@ class InspectionService:
             if prior is not None and prior.status == "completed":
                 return json.loads(prior.response)
 
-        line = db.query(ProductionLine).filter(ProductionLine.line_id == ticket.line_id).first()
-        now_utc = utc_now()
-        is_approved = action.upper() == "APPROVE"
+        # Reserve the ticket before hardware is touched. The conditional update
+        # lets only one request leave PENDING_APPROVAL, even across sessions.
+        reserved = db.execute(
+            update(MESTicket)
+            .where(
+                MESTicket.ticket_id == ticket_id,
+                MESTicket.status == "PENDING_APPROVAL",
+            )
+            .values(
+                status="RESOLVING",
+                approved_by=approved_by,
+                resolution_key=resolution_key,
+            )
+        )
+        if reserved.rowcount != 1:
+            db.rollback()
+            return {"status": "CONFLICT", "message": "Ticket has already been resolved or is being resolved."}
+        db.commit()
+        db.refresh(ticket)
 
-        ticket.status = "APPROVED" if is_approved else "REJECTED"
-        ticket.approved_by = approved_by
-        ticket.resolved_at = now_utc
+        if not is_approved:
+            plc_result = {"status": "NOT_DISPATCHED", "reason": "REJECTED_BY_SUPERVISOR"}
+            ticket.status = "REJECTED"
+            ticket.plc_status = "NOT_DISPATCHED"
+            ticket.plc_result_json = json.dumps(plc_result, sort_keys=True)
+            ticket.resolved_at = now_utc
+            plc_dispatched = False
+        else:
+            if plc_bridge is None and ticket.thread_id:
+                # Agent-driven HITL flow (persisted graph thread): the service
+                # is allowed to use the explicit SIMULATION bridge — never a
+                # hardware connection. Direct calls without a thread stay
+                # fail-closed (ACTUATION_FAILED) so nothing is silently
+                # actuated outside the supervised flow.
+                try:
+                    from ..industrial.plc_bridge import PLCBridge
 
-        # 1. Update line state if halt is approved
-        if is_approved and line and ticket.action_type == "HALT_LINE":
-            line.status = "HALTED"
+                    plc_bridge = PLCBridge(mode="simulation")
+                except Exception:
+                    plc_bridge = None
+            if plc_bridge is None:
+                plc_result = {"status": "FAILED", "error": "PLC_BRIDGE_UNAVAILABLE"}
+            else:
+                try:
+                    if ticket.action_type == "HALT_LINE":
+                        plc_result = plc_bridge.halt_line(ticket.line_id)
+                    elif ticket.action_type == "ROUTE_REWORK":
+                        plc_result = plc_bridge.divert_rework(ticket.line_id)
+                    else:
+                        plc_result = {"status": "FAILED", "error": "UNSUPPORTED_ACTION_TYPE"}
+                except Exception as exc:
+                    plc_result = {"status": "FAILED", "error": str(exc)}
 
-        # 2. Dispatch to PLC Bridge if connected
-        plc_dispatched = False
-        if plc_bridge is not None:
-            try:
-                if is_approved and ticket.action_type == "HALT_LINE":
-                    plc_bridge.halt_line(ticket.line_id)
-                    plc_dispatched = True
-                elif is_approved and ticket.action_type == "ROUTE_REWORK":
-                    plc_bridge.divert_rework(ticket.line_id)
-                    plc_dispatched = True
-            except Exception as e:
-                print(f"[Service] Note during PLC dispatch: {e}")
+            plc_status = plc_result.get("status", "FAILED")
+            plc_dispatched = plc_status in {"DISPATCHED", "SIMULATED"}
+            ticket.plc_status = plc_status
+            ticket.plc_result_json = json.dumps(plc_result, sort_keys=True)
+            ticket.resolved_at = now_utc
+            if plc_dispatched:
+                ticket.status = "EXECUTED"
+                line = db.query(ProductionLine).filter(ProductionLine.line_id == ticket.line_id).first()
+                if line and ticket.action_type == "HALT_LINE":
+                    line.status = "HALTED"
+            else:
+                ticket.status = "ACTUATION_FAILED"
 
-        # 3. Resume LangGraph HITL checkpoint if thread_id exists
+        # 3. Resume LangGraph HITL checkpoint if thread_id exists.
+        # The ticket reservation already succeeded, so resume that exact
+        # persisted graph with the durable PLC outcome as evidence.
         agent_resumed = False
         if agent is not None and ticket.thread_id:
             try:
+                import json as _json
+
+                try:
+                    _plc_evidence = _json.loads(ticket.plc_result_json or "{}")
+                except Exception:
+                    _plc_evidence = {"status": ticket.plc_status or "UNKNOWN"}
                 agent.resume_approval(
                     thread_id=ticket.thread_id,
                     approved=is_approved,
-                    supervisor_id=approved_by
+                    supervisor_id=approved_by,
+                    plc_result=_plc_evidence,
+                    ticket_id=ticket.ticket_id,
                 )
                 agent_resumed = True
             except Exception as e:
@@ -246,19 +305,31 @@ class InspectionService:
             action="APPROVE_ACTION" if is_approved else "REJECT_ACTION",
             line_id=ticket.line_id,
             ticket_id=ticket.ticket_id,
-            details=f"Action {ticket.action_type} {'approved' if is_approved else 'rejected'} by {approved_by}. (PLC={plc_dispatched}, AgentResumed={agent_resumed})",
+            details=(
+                f"Action {ticket.action_type} {'approved' if is_approved else 'rejected'} by {approved_by}. "
+                f"(PLC={ticket.plc_status}, AgentResumed={agent_resumed})"
+            ),
             source_ip=source_ip
         )
         db.add(audit)
         db.commit()
 
-        if is_approved:
+        if is_approved and ticket.status == "EXECUTED":
             result = {
                 "status": "EXECUTED",
                 "message": f"Dây chuyền {line.line_id if line else ticket.line_id} đã được thi hành lệnh {ticket.action_type}.",
                 "ticket_id": ticket.ticket_id,
                 "plc_dispatched": plc_dispatched,
                 "agent_resumed": agent_resumed
+            }
+        elif is_approved:
+            result = {
+                "status": "ACTUATION_FAILED",
+                "message": f"PLC command for ticket {ticket.ticket_id} did not execute.",
+                "ticket_id": ticket.ticket_id,
+                "plc_dispatched": False,
+                "plc_result": plc_result,
+                "agent_resumed": agent_resumed,
             }
         else:
             result = {
@@ -284,7 +355,7 @@ class InspectionService:
                         expires_at="",
                     ))
                     db.add(OutboxEvent(
-                        event_id=f"mes-resolve:{ticket_id}:{idempotency_key}",
+                        event_id=f"mes-resolve:{ticket_id}:{resolution_key}",
                         destination="mes-resolve",
                         payload=json.dumps(
                             {"ticket_id": ticket_id,

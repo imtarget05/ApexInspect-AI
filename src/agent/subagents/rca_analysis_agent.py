@@ -28,7 +28,8 @@ class RCAAnalysisAgent:
                 self.llm_mode = "deterministic"
                 return None
         elif self.llm_mode == "local":
-            return LocalOllamaProvider(model_name=os.getenv("LOCAL_MODEL", "llama3.2"))
+            # Local default: qwen2.5:3b via Ollama (M1 Pro 16GB, offline-safe).
+            return LocalOllamaProvider(model_name=os.getenv("LOCAL_MODEL", "qwen2.5:3b"))
         
         return None
 

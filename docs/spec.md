@@ -1,6 +1,15 @@
 # Product Specification: ApexInspect AI
 **Autonomous Industrial Vision & Defect Resolution Agent System**
 
+## 0. DEPLOYMENT CHỐT: Edge-First (Offline On-Premise)
+
+- **Deployment duy nhất: EDGE-FIRST** — YOLOv8 ONNX chạy 100% tại Edge PC công nghiệp
+  (target ≤15ms/frame), RCA ưu tiên Local/Deterministic (Heuristic rule-based + BM25
+  inference thuần). Cloud chỉ là Control Plane nhận báo cáo bất đồng bộ (async-only),
+  không nằm luồng chính; offline 100% vẫn soi + dừng chuyền tại chỗ.
+- Training: Vision Transfer Learning/Finetune YOLOv8n trên Colab
+  (`colab/train_yolo_T4.ipynb`, giữ nguyên).
+
 ## 1. Executive Summary & Problem Statement
 Trong môi trường sản xuất công nghiệp và chế tạo điện tử (SMT / PCBA assembly), việc kiểm soát chất lượng sản phẩm (QA/QC) truyền thống đối mặt với 2 rào cản lớn:
 1. **Kiểm tra ngoại quan thủ công (Manual Optical Inspection)**: Tốn nhân lực, độ tập trung giảm theo thời gian ca làm việc, tỷ lệ bỏ sót các vi lỗi như chân hàn chập (short circuit), mất lỗ linh kiện (missing hole) hoặc vết xước bề mặt là rất cao.
@@ -42,7 +51,7 @@ $$\text{Camera Stream (OpenCV)} \longrightarrow \text{ONNX Defect Detection} \lo
 
 ### FR-3: SOP Knowledge Retrieval & Root Cause Analysis (Agentic RAG)
 - Lưu trữ kho quy trình thao tác chuẩn (SOP) và cẩm nang bảo trì thiết bị dán bề mặt / lò hàn hồi lưu.
-- Trích xuất thông tin qua cơ chế Hybrid RAG (Dense vector search + BM25 keyword matching).
+- Trích xuất thông tin qua cơ chế Rerank/Processing: Heuristic rule-based + BM25 inference thuần (Edge local, deterministic).
 - Áp dụng nguyên tắc **Zero Hallucination**: Trích dẫn minh bạch mã quy trình `[SOP-SMT-xxx]`. Nếu tài liệu không đề cập nguyên nhân, Agent phải từ chối phỏng đoán.
 
 ### FR-4: Human-in-the-Loop (HITL) Action Execution

@@ -38,15 +38,15 @@ class RecordingPLCBridge:
 
     def halt_line(self, line_id):
         self.calls.append(("halt_line", line_id))
-        return {"action": "HALT_LINE", "status": "SIMULATED", "conveyor_running": False}
+        return {"action": "HALT_LINE", "mode": "SIMULATION", "status": "SIMULATED", "conveyor_running": False}
 
     def resume_line(self, line_id):
         self.calls.append(("resume_line", line_id))
-        return {"action": "RESUME_LINE", "status": "SIMULATED", "conveyor_running": True}
+        return {"action": "RESUME_LINE", "mode": "SIMULATION", "status": "SIMULATED", "conveyor_running": True}
 
     def divert_rework(self, line_id):
         self.calls.append(("divert_rework", line_id))
-        return {"action": "ROUTE_REWORK", "status": "SIMULATED", "tower_light": "YELLOW"}
+        return {"action": "ROUTE_REWORK", "mode": "SIMULATION", "status": "SIMULATED", "tower_light": "YELLOW"}
 
 
 class ApprovalSafetyTestBase(unittest.TestCase):
@@ -104,7 +104,7 @@ class ApprovalSafetyTestBase(unittest.TestCase):
                 ticket_id = created_id
         return CascadeResult(incident_triggered, ticket_id)
 
-    def _resolve(self, ticket_id, action, plc_bridge=None):
+    def _resolve(self, ticket_id, action, plc_bridge=None, idempotency_key="approval-test-key"):
         """Runs the service-layer resolution (never the FastAPI endpoint)."""
         return InspectionService.resolve_ticket(
             db=self.db,
@@ -113,6 +113,7 @@ class ApprovalSafetyTestBase(unittest.TestCase):
             approved_by="supervisor_tester",
             agent=None,
             plc_bridge=plc_bridge,
+            idempotency_key=idempotency_key,
         )
 
     def _make_pending_ticket(self, action_type="HALT_LINE"):
@@ -178,6 +179,50 @@ class ApprovalSafetyTestBase(unittest.TestCase):
         self.assertEqual(plc.calls, [("halt_line", LINE_ID)], "PLC dispatch count mismatch")
         self.assertEqual(self._line().status, "HALTED")
 
+    def test_repeated_approval_is_rejected_without_a_second_plc_dispatch(self):
+        """Same ticket + same key replays the stored EXECUTED response
+        (Plan 03 idempotency gate) instead of dispatching twice."""
+        ticket_id = self._make_pending_ticket(action_type="HALT_LINE")
+        plc = RecordingPLCBridge()
+
+        first = self._resolve(ticket_id, "APPROVE", plc, "approval-once")
+        second = self._resolve(ticket_id, "APPROVE", plc, "approval-once")
+
+        self.assertEqual(first["status"], "EXECUTED")
+        self.assertEqual(second["status"], "EXECUTED")
+        self.assertEqual(second["ticket_id"], ticket_id)
+        self.assertEqual(plc.calls, [("halt_line", LINE_ID)])
+        ticket = self.db.query(MESTicket).filter_by(ticket_id=ticket_id).first()
+        self.assertEqual(ticket.status, "EXECUTED")
+        self.assertEqual(ticket.resolution_key, "approval-once")
+        self.assertEqual(ticket.plc_status, "SIMULATED")
+        self.assertIsNotNone(ticket.plc_result_json)
+
+    def test_failed_plc_dispatch_keeps_line_running_and_persists_failure(self):
+        """Treating a FAILED bridge result as execution must fail this test."""
+        class FailingPLCBridge(RecordingPLCBridge):
+            def halt_line(self, line_id):
+                self.calls.append(("halt_line", line_id))
+                return {
+                    "action": "HALT_LINE",
+                    "mode": "HARDWARE",
+                    "status": "FAILED",
+                    "error": "PLC_UNAVAILABLE",
+                }
+
+        ticket_id = self._make_pending_ticket(action_type="HALT_LINE")
+        plc = FailingPLCBridge()
+
+        response = self._resolve(ticket_id, "APPROVE", plc, "approval-failure")
+
+        self.assertEqual(response["status"], "ACTUATION_FAILED")
+        self.assertEqual(plc.calls, [("halt_line", LINE_ID)])
+        self.assertEqual(self._line().status, "RUNNING")
+        ticket = self.db.query(MESTicket).filter_by(ticket_id=ticket_id).first()
+        self.assertEqual(ticket.status, "ACTUATION_FAILED")
+        self.assertEqual(ticket.plc_status, "FAILED")
+        self.assertIn("PLC_UNAVAILABLE", ticket.plc_result_json)
+
     # --- 3. reject must not execute anything -----------------------------
     def test_reject_does_not_dispatch_to_plc_and_keeps_line_running(self):
         ticket_id = self._make_pending_ticket(action_type="HALT_LINE")
@@ -193,6 +238,8 @@ class ApprovalSafetyTestBase(unittest.TestCase):
         ticket = self.db.query(MESTicket).filter_by(ticket_id=ticket_id).first()
         self.assertEqual(ticket.status, "REJECTED")
         self.assertIsNotNone(ticket.resolved_at)
+        self.assertEqual(ticket.plc_status, "NOT_DISPATCHED")
+        self.assertIsNotNone(ticket.plc_result_json)
 
     def test_reject_routes_rework_ticket_without_plc_dispatch(self):
         """ROUTE_REWORK tickets must also stay untouched when rejected."""
@@ -226,7 +273,7 @@ class ApprovalSafetyTestBase(unittest.TestCase):
         # With no bridge injected the service must not actuate anything at all.
         ticket_id = self._make_pending_ticket(action_type="HALT_LINE")
         resp = self._resolve(ticket_id, "APPROVE", plc_bridge=None)
-        self.assertEqual(resp["status"], "EXECUTED")
+        self.assertEqual(resp["status"], "ACTUATION_FAILED")
         self.assertFalse(resp["plc_dispatched"])
 
     # --- 5. idempotent replay (Plan 03) ----------------------------------
@@ -237,19 +284,8 @@ class ApprovalSafetyTestBase(unittest.TestCase):
         plc = RecordingPLCBridge()
         key = f"replay-{uuid.uuid4().hex[:6]}"
 
-        def resolve():
-            return InspectionService.resolve_ticket(
-                db=self.db,
-                ticket_id=ticket_id,
-                action="APPROVE",
-                approved_by="supervisor_tester",
-                agent=None,
-                plc_bridge=plc,
-                idempotency_key=key,
-            )
-
-        first = resolve()
-        second = resolve()
+        first = self._resolve(ticket_id, "APPROVE", plc, key)
+        second = self._resolve(ticket_id, "APPROVE", plc, key)
 
         self.assertEqual(first["status"], "EXECUTED")
         self.assertEqual(second["status"], "EXECUTED")

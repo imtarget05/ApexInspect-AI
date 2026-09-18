@@ -218,6 +218,26 @@ def _ensure_thread_id_column(target_engine) -> None:
     except Exception as mig_err:
         print(f"[Database] thread_id migration note: {mig_err}")
 
+
+def _ensure_ticket_resolution_columns(target_engine) -> None:
+    """Adds durable approval and PLC-result evidence fields to existing databases."""
+    from sqlalchemy import inspect
+
+    columns = {
+        "resolution_key": "VARCHAR(128)",
+        "plc_status": "VARCHAR(32)",
+        "plc_result_json": "TEXT",
+    }
+    try:
+        existing = {column["name"] for column in inspect(target_engine).get_columns("mes_tickets")}
+        with target_engine.connect() as conn:
+            for name, sql_type in columns.items():
+                if name not in existing:
+                    conn.exec_driver_sql(f"ALTER TABLE mes_tickets ADD COLUMN {name} {sql_type};")
+            conn.commit()
+    except Exception as mig_err:
+        print(f"[Database] ticket resolution migration note: {mig_err}")
+
 def init_db():
     """Initializes tables, ensures schema migrations, and seeds default line configuration."""
     from .models import ProductionLine
@@ -228,6 +248,7 @@ def init_db():
 
     # Cross-engine schema migration (SQLite AND PostgreSQL/Neon)
     _ensure_thread_id_column(engine)
+    _ensure_ticket_resolution_columns(engine)
 
     db = SessionLocal()
     try:
