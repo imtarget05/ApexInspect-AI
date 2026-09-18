@@ -10,7 +10,7 @@ services:
     region: frankfurt
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    healthCheckPath: /health
+    healthCheckPath: /health/live
     autoDeploy: true
     # Biến môi trường trên dashboard Render (Secrets — KHÔNG commit giá trị):
     #   APP_MODE     = api
