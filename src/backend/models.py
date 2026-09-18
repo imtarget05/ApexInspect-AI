@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import Column, String, Float, Boolean, DateTime, Text, JSON
+from sqlalchemy import Column, String, Float, Boolean, DateTime, Text, JSON, Integer
 from .database import Base
 
 def utc_now():
@@ -59,4 +59,81 @@ class AuditLog(Base):
     ticket_id = Column(String(64), nullable=True)
     details = Column(Text, nullable=True)
     source_ip = Column(String(50), nullable=True)
+
+
+class IdempotencyKey(Base):
+    """Caller-supplied idempotency record (Plan 02 shared contract)."""
+    __tablename__ = "idempotency_keys"
+
+    caller_scope = Column(String(128), primary_key=True)
+    idem_key = Column(String(128), primary_key=True)
+    fingerprint = Column(Text, nullable=False, default="")
+    status = Column(String(32), nullable=False, default="pending")
+    response = Column(Text, nullable=False, default="")
+    expires_at = Column(String(64), nullable=False, default="")
+
+
+class Job(Base):
+    """Durable async job row (Plan 02 shared contract)."""
+    __tablename__ = "jobs"
+
+    job_id = Column(String(64), primary_key=True)
+    kind = Column(String(64), nullable=False, default="")
+    status = Column(String(32), nullable=False, default="queued")
+    attempt = Column(Integer, nullable=False, default=0)
+    lease_expires_at = Column(String(64), nullable=False, default="")
+    input_ref = Column(Text, nullable=False, default="")
+    result_ref = Column(Text, nullable=False, default="")
+    error_class = Column(String(64), nullable=False, default="")
+    created_at = Column(String(64), nullable=False, default="")
+    updated_at = Column(String(64), nullable=False, default="")
+
+
+class OutboxEvent(Base):
+    """Reliable event delivery outbox (Plan 02 shared contract)."""
+    __tablename__ = "outbox_events"
+
+    event_id = Column(String(64), primary_key=True)
+    destination = Column(String(128), nullable=False, default="")
+    payload = Column(Text, nullable=False, default="")
+    version = Column(String(32), nullable=False, default="v1")
+    attempts = Column(Integer, nullable=False, default=0)
+    next_retry_at = Column(String(64), nullable=False, default="")
+    delivered_at = Column(String(64), nullable=False, default="")
+
+
+class DeadLetter(Base):
+    """Terminal failure records awaiting operator replay decision."""
+    __tablename__ = "dead_letters"
+
+    job_id = Column(String(64), primary_key=True)
+    input_ref = Column(Text, nullable=False, default="")
+    diagnosis = Column(Text, nullable=False, default="")
+    owner = Column(String(128), nullable=False, default="")
+    replay_decision = Column(String(32), nullable=False, default="pending")
+
+
+class AuditEvent(Base):
+    """Generic audit trail (distinct from MES AuditLog)."""
+    __tablename__ = "audit_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    actor = Column(String(128), nullable=False, default="")
+    action = Column(String(128), nullable=False, default="")
+    object = Column(String(256), nullable=False, default="")
+    request_id = Column(String(64), nullable=False, default="")
+    outcome = Column(String(32), nullable=False, default="")
+    reason = Column(Text, nullable=False, default="")
+    created_at = Column(String(64), nullable=False, default="")
+
+
+class ModelRegistry(Base):
+    """Promoted model bundle versions (Plan 02 shared contract)."""
+    __tablename__ = "model_registry"
+
+    version = Column(String(64), primary_key=True)
+    fingerprint = Column(String(128), nullable=False, default="")
+    corpus_version = Column(String(64), nullable=False, default="")
+    status = Column(String(32), nullable=False, default="staged")
+    promoted_at = Column(String(64), nullable=False, default="")
 
