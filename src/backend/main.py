@@ -39,6 +39,52 @@ def health_check():
     """Liveness probe for Docker HEALTHCHECK (Space API) and post-deploy smoke tests."""
     return {"status": "ok", "service": "apexinspect-gateway", "version": app.version}
 
+
+def _check_database_configured() -> None:
+    """Non-mutating config probe: a supported DATABASE_URL or a resolvable
+    SQLite fallback must exist. Opens no connections, writes nothing."""
+    url = os.getenv("DATABASE_URL", "").strip()
+    if url:
+        scheme = url.split("://", 1)[0].lower()
+        if scheme not in ("sqlite", "postgresql", "postgres"):
+            raise RuntimeError(f"unsupported DATABASE_URL scheme: {scheme}")
+        return
+    fallback = os.getenv("SQLITE_PATH", "./factory.db")
+    parent = os.path.dirname(os.path.abspath(fallback)) or "."
+    if not os.path.isdir(parent):
+        raise RuntimeError(f"sqlite fallback directory missing: {parent}")
+
+
+def _check_model_bundle_present() -> None:
+    """Non-mutating probe: model bundle file must exist. Loads nothing."""
+    model_path = os.getenv("MODEL_PATH", "models/yolov8n_pcb_defect.onnx")
+    if not os.path.isfile(model_path):
+        raise RuntimeError(f"model bundle missing: {model_path}")
+
+
+@app.get("/health/live")
+def health_live():
+    """Liveness: process can serve. Requires no external dependencies."""
+    return {"status": "ok", "service": "apexinspect-gateway", "version": app.version}
+
+
+@app.get("/health/ready")
+def health_ready():
+    """Readiness: config valid + required dependencies reachable. No writes."""
+    checks = {"config": "ok"}
+    try:
+        _check_database_configured()
+        checks["database"] = "ok"
+    except Exception as exc:
+        checks["database"] = f"not-ready: {exc}"
+    try:
+        _check_model_bundle_present()
+        checks["model_bundle"] = "ok"
+    except Exception as exc:
+        checks["model_bundle"] = f"not-ready: {exc}"
+    ready = all(value == "ok" for value in checks.values())
+    return {"status": "ready" if ready else "not-ready", "checks": checks}
+
 from .service import InspectionService
 from .models import ProductionLine, InspectionLog, MESTicket, AuditLog
 

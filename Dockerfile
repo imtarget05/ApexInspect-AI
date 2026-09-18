@@ -32,7 +32,7 @@ EXPOSE 7860
 
 # Healthcheck: branch by APP_MODE (api -> /health, ui -> Streamlit health)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD sh -c "if [ \"$APP_MODE\" = \"api\" ]; then curl -fsS http://localhost:${PORT:-7860}/health || exit 1; else curl -fsS http://localhost:${PORT:-7860}/_stcore/health || exit 1; fi"
+    CMD sh -c "if [ \"$APP_MODE\" = \"api\" ]; then curl -fsS http://localhost:${PORT:-7860}/health/live || exit 1; else curl -fsS http://localhost:${PORT:-7860}/_stcore/health || exit 1; fi"
 
 # Streamlit defaults for container environment
 ENV STREAMLIT_SERVER_PORT=7860
