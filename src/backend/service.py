@@ -1,11 +1,14 @@
 import uuid
 import datetime
+import json
 from collections import Counter
 from typing import Dict, Any, Tuple, Optional, List
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
+from sqlalchemy.exc import IntegrityError
 
 from .models import ProductionLine, InspectionLog, MESTicket, AuditLog
+from .models import IdempotencyKey, OutboxEvent
 from .schemas import InspectionCreate, ActionApprovalRequest, LineMetricsResponse
 
 
@@ -177,12 +180,26 @@ class InspectionService:
         approved_by: str,
         agent: Optional[Any] = None,
         plc_bridge: Optional[Any] = None,
+        idempotency_key: Optional[str] = None,
         source_ip: str = "127.0.0.1"
     ) -> Dict[str, Any]:
         """Supervises ticket approval/rejection, resumes LangGraph HITL, and dispatches to PLC."""
         ticket = db.query(MESTicket).filter(MESTicket.ticket_id == ticket_id).first()
         if not ticket:
             return {"status": "ERROR", "message": f"Ticket {ticket_id} not found."}
+
+        # Idempotency gate (Plan 03): a replayed key returns the stored
+        # response without touching the ticket, agent, or PLC. Scope is
+        # per-ticket so a key can never resolve a different ticket.
+        idem_scope = f"mes_resolve:{ticket_id}"
+        if idempotency_key:
+            prior = (
+                db.query(IdempotencyKey)
+                .filter_by(caller_scope=idem_scope, idem_key=idempotency_key)
+                .first()
+            )
+            if prior is not None and prior.status == "completed":
+                return json.loads(prior.response)
 
         line = db.query(ProductionLine).filter(ProductionLine.line_id == ticket.line_id).first()
         now_utc = utc_now()
@@ -236,7 +253,7 @@ class InspectionService:
         db.commit()
 
         if is_approved:
-            return {
+            result = {
                 "status": "EXECUTED",
                 "message": f"Dây chuyền {line.line_id if line else ticket.line_id} đã được thi hành lệnh {ticket.action_type}.",
                 "ticket_id": ticket.ticket_id,
@@ -244,13 +261,48 @@ class InspectionService:
                 "agent_resumed": agent_resumed
             }
         else:
-            return {
+            result = {
                 "status": "DISMISSED",
                 "message": f"Lệnh can thiệp cho ticket {ticket.ticket_id} đã bị từ chối bởi Quản đốc {approved_by}.",
                 "ticket_id": ticket.ticket_id,
                 "plc_dispatched": False,
                 "agent_resumed": agent_resumed
             }
+
+        # Record the idempotent outcome + outbox event in one transaction so
+        # a replay returns exactly this response. Lost races (IntegrityError)
+        # mean another worker completed first: return the stored response.
+        if idempotency_key:
+            try:
+                with db.begin_nested():
+                    db.add(IdempotencyKey(
+                        caller_scope=idem_scope,
+                        idem_key=idempotency_key,
+                        fingerprint=ticket_id,
+                        status="completed",
+                        response=json.dumps(result, default=str),
+                        expires_at="",
+                    ))
+                    db.add(OutboxEvent(
+                        event_id=f"mes-resolve:{ticket_id}:{idempotency_key}",
+                        destination="mes-resolve",
+                        payload=json.dumps(
+                            {"ticket_id": ticket_id,
+                             "outcome": result["status"]},
+                            default=str,
+                        ),
+                        version="v1",
+                    ))
+            except IntegrityError:
+                db.rollback()
+                prior = (
+                    db.query(IdempotencyKey)
+                    .filter_by(caller_scope=idem_scope, idem_key=idempotency_key)
+                    .first()
+                )
+                return json.loads(prior.response)
+            db.commit()
+        return result
 
     @staticmethod
     def resume_line(

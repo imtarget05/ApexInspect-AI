@@ -229,6 +229,33 @@ class ApprovalSafetyTestBase(unittest.TestCase):
         self.assertEqual(resp["status"], "EXECUTED")
         self.assertFalse(resp["plc_dispatched"])
 
+    # --- 5. idempotent replay (Plan 03) ----------------------------------
+    def test_replay_same_key_returns_stored_response_without_second_dispatch(self):
+        """Same ticket + same key: replay returns the stored EXECUTED
+        response; the PLC bridge is touched exactly once."""
+        ticket_id = self._make_pending_ticket(action_type="HALT_LINE")
+        plc = RecordingPLCBridge()
+        key = f"replay-{uuid.uuid4().hex[:6]}"
+
+        def resolve():
+            return InspectionService.resolve_ticket(
+                db=self.db,
+                ticket_id=ticket_id,
+                action="APPROVE",
+                approved_by="supervisor_tester",
+                agent=None,
+                plc_bridge=plc,
+                idempotency_key=key,
+            )
+
+        first = resolve()
+        second = resolve()
+
+        self.assertEqual(first["status"], "EXECUTED")
+        self.assertEqual(second["status"], "EXECUTED")
+        self.assertEqual(second["ticket_id"], ticket_id)
+        self.assertEqual(plc.calls, [("halt_line", LINE_ID)])
+
 
 if __name__ == "__main__":
     unittest.main()
