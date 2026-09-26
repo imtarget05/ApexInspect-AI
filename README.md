@@ -18,16 +18,16 @@
 
 ---
 
-**ApexInspect AI** is an enterprise-grade, edge-deployable **Smart Factory Vision & Autonomous Quality Agent** system. It bridges high-speed Computer Vision inspection on surface-mount assembly lines (SMT/PCBA) with an Agentic AI decision pipeline and real-time **Modbus TCP Industrial PLC** hardware control. When recurring or critical defects appear, the system diagnoses root causes via Okapi BM25 SOP retrieval, proposes corrective actions, and synchronizes with Manufacturing Execution Systems (**MES**) under strict **Human-In-The-Loop (HITL)** governance and immutable **Audit Trail** logging.
+**ApexInspect AI** is an enterprise-grade, edge-deployable **Smart Factory Vision & Autonomous Quality Agent** system. It bridges high-speed Computer Vision inspection on surface-mount assembly lines (SMT/PCBA) with an Agentic AI decision pipeline and real-time **Modbus TCP Industrial PLC** hardware control. When recurring or critical defects appear, the system diagnoses root causes via Okapi BM25 SOP retrieval, proposes corrective actions, and synchronizes with Manufacturing Execution Systems (**MES**) under strict **Human-In-The-Loop (HITL)** governance and **append-only `AuditLog`** logging (see the caveat in the Performance section).
 
 Core workflow: `Inspect → Detect → Diagnose → Propose → Human Approve → PLC Dispatch & MES Sync`
 
 ## ✨ Key Technical Highlights
 
 1. **Edge Inference (ONNX Runtime + SAHI Patching)**: Exported YOLOv8 defect detection model running via ONNX Runtime CPU. The saved local benchmark records **43.36 ms average latency (23.1 FPS)** on Apple M-series macOS, using synthetic PCB frames with model input `[1, 3, 640, 640]`, 20 measurements after 5 warm-up runs (see `benchmark_results.json`). The project also includes `HighResPatchInferencer` with NMS merging; this benchmark does not establish 4K patching or end-to-end throughput. Production target: ≤35 ms on cloud 2-vCPU, not yet verified as achieved.
-2. **Industrial OT & Modbus TCP PLC Bridge**: Native Modbus TCP client (`PLCBridge`) and Virtual Modbus Server (`VirtualModbusServer`) to directly control conveyor interlocks, pneumatic reject diverters, and andon tower lights (Red/Yellow/Green).
+2. **Industrial OT & Modbus TCP PLC Bridge**: Native Modbus TCP client (`PLCBridge`) and Virtual Modbus Server (`VirtualModbusServer`) for conveyor interlocks, pneumatic reject diverters, and andon tower lights (Red/Yellow/Green). **Simulation-only by default**: `APEX_PLC_MODE` defaults to `simulation`, so a default deployment never contacts a PLC and a failed hardware write is never converted into a simulated success. Real actuation requires setting `APEX_PLC_MODE=hardware` on an approved line.
 3. **Grounded IPC-A-610 SOP Knowledge Retrieval**: Okapi BM25 Hybrid RAG engine with domain-specific synonym expansion indexing standard operating procedures including IPC-A-610 Class 3 solder criteria, thermal reflow profile drift (TAL/PWI), and pick & place nozzle maintenance.
-4. **Deterministic Human-In-The-Loop (HITL) Safety & Audit Trail**: LangGraph `MemorySaver` + `interrupt()` and `Command(resume=...)` primitives with dynamic thread IDs. Factory-floor actions strictly require supervisor sign-off and are recorded into an immutable `AuditLog` table.
+4. **Deterministic Human-In-The-Loop (HITL) Safety & Audit Trail**: LangGraph `MemorySaver` + `interrupt()` and `Command(resume=...)` primitives with dynamic thread IDs. Factory-floor actions strictly require supervisor sign-off and are recorded into an `AuditLog` table. The table is append-only by convention — there is no database trigger and no hash chain, so it is **not** tamper-evident: anyone with write access can alter or delete a row. Treat it as an operational log, not as a regulated record.
 5. **Unified Architecture & Production Gateway**: Consolidated `InspectionService` layer shared across FastAPI REST gateway and Streamlit UI, protected by `X-API-KEY` security authentication.
 6. **Resilient Dual-Mode Persistence**: Native **Neon Serverless PostgreSQL** integration with automatic zero-config fallback to **SQLite** (`factory.db`) with row-level locking for seamless offline operation.
 
@@ -46,7 +46,7 @@ flowchart TD
         Telemetry --> Ingest["FastAPI Ingestion Engine"]
         Ingest --> Service["InspectionService (Single Source of Truth)"]
         Service --> DB[("Neon PostgreSQL / SQLite")]
-        Service --> Audit[("Immutable AuditLog")]
+        Service --> Audit[("AuditLog (append-only, not tamper-evident)")]
         Service --> Trigger{"Trigger Engine: 3-Consecutive or Yield Drift >15%"}
     end
 
@@ -78,15 +78,21 @@ Measured on Apple M-series (local macOS) with ONNX Runtime 1.30.0, using synthet
 | Output shape | `[1, 10, 8400]` |
 | Warmup runs | 5 |
 | Measured runs | 20 |
-| **Avg latency** | **43.36 ms** |
+| **Avg latency** | **43.36 ms** (synthetic frames) |
 | Min latency | 42.1 ms |
 | Max latency | 50.17 ms |
-| **Throughput** | **23.1 FPS** |
+| **Throughput** | **23.1 FPS** (synthetic frames) |
 | Confidence threshold | 0.50 |
 | Hardware | Apple M-series (local macOS) |
 | ONNX Runtime | 1.30.0 |
 
-> **Scope note**: This is a local macOS measurement. The production target of ≤35 ms/frame on cloud 2-vCPU is **not yet verified as achieved**. This micro-benchmark does not establish 4K SAHI patching or end-to-end pipeline throughput. Per-frame `inference_time_ms` is recorded in the database on every inspection for real-world latency tracking.
+> **Scope note — read this before quoting the number**: 43.36 ms / 23.1 FPS is a measurement of **synthetic frames** from `PCBCameraSimulator` on a local M-series macOS, after 5 warm-up runs, with image decode excluded. It is not a real-frame measurement and not a production measurement.
+>
+> Two facts, both reproduced on the committed model:
+> 1. **The committed `models/yolov8n_pcb_defect.onnx` produces ZERO detections on all 13 real frames in `data/sample_pcbs/`** (max class score ~0.0025–0.0029; a zeros tensor scores 0.002379 versus 0.002655 for a real photo, so the output is not meaningfully responsive to image content). Detection quality is therefore **not demonstrated on real imagery**. Retraining is deliberately out of scope here: it needs a GPU and an owner decision on the training set.
+> 2. On those real frames, end-to-end `infer()` (decode → quality gate → preprocess → ONNX → NMS → annotate) measured **mean 64.4 ms, median 67.3 ms, range 54.3–73.7 ms (≈ 15.5 FPS)** on a Windows x86-64 host with onnxruntime CPU. Different hardware from the 43.36 ms run, so the two are not directly comparable — but the honest summary is that neither is a verified production number.
+>
+> The production target of ≤35 ms/frame on cloud 2-vCPU is **not verified as achieved**. This micro-benchmark does not establish 4K SAHI patching or end-to-end pipeline throughput. Per-frame `inference_time_ms` is recorded in the database on every inspection for real-world latency tracking.
 
 Run the benchmark yourself:
 
@@ -105,7 +111,7 @@ python scripts/check_benchmark_target.py
 | Metric | Local macOS measurement | Cloud 2-vCPU target |
 | :--- | :--- | :--- |
 | Source | `benchmark_results.json` (2026-09-17 01:14:20) | No cloud measurement verified |
-| Latency / FPS | **43.36 ms / 23.1 FPS** | **≤35 ms**, not yet verified as achieved |
+| Latency / FPS | **43.36 ms / 23.1 FPS** (synthetic frames, local M-series macOS) | **≤35 ms**, not yet verified as achieved |
 
 **CI scope:** `.github/workflows/ci.yml` runs pytest and a Docker build smoke test. It does **not** run a latency gate or block PRs based on a >50 ms benchmark result.
 
@@ -126,7 +132,7 @@ ApexInspect AI cung cấp metrics sau cho factory monitoring:
 - **Per-frame inference latency** (`inference_time_ms`): ghi vào DB mỗi lần inspection, cho phép track real-world performance theo thời gian.
 - **Yield rate**: tính từ tổng inspection / defective count, exposable qua `GET /api/v1/lines/{line_id}/metrics`.
 - **Defect Pareto**: phân loại defect theo class, dùng cho quality improvement.
-- **Audit trail**: mọi action (trigger, approve, reject, PLC dispatch) ghi vào `audit_logs` — immutable.
+- **Audit trail**: mọi action (trigger, approve, reject, PLC dispatch) ghi vào `audit_logs` — append-only by convention; không có hash chain hay DB trigger, nên không phải là audit log chống chỉng (để tamper-evident).
 - **HITL checkpoint state**: LangGraph `MemorySaver` giữ trạng thái interrupted workflow, resume sau khi supervisor approve.
 
 Metrics nào giảm sát khi line dừng:
@@ -136,7 +142,7 @@ Metrics nào giảm sát khi line dừng:
 
 ## ⚠️ Limitations
 
-1. **Inference speed**: 43.36 ms/frame (saved benchmark) trên local macOS — chưa đạt 35ms target. Cần benchmark trên cloud 2-vCPU thật để verify.
+1. **Inference speed**: 43.36 ms/frame is the saved synthetic-frame benchmark on a local M-series macOS, not a real-frame number. The committed model scores ZERO detections on all 13 real sample frames, and real-frame `infer()` measured 64.4 ms mean on a different host. The 35 ms target is unmet and unverified — a cloud 2-vCPU benchmark on real frames is still required. See the Performance scope note.
 2. **BM25 RAG**: không semantic, phụ thuộc synonym map thủ công. Không scale với corpus lớn.
 3. **Modbus TCP**: không encrypt/auth built-in — cần network-level security.
 4. **Virtual PLC simulator**: không mimic real hardware timing/error behavior.

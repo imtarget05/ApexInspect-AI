@@ -126,6 +126,10 @@ class HighResPatchInferencer:
         start_time = time.perf_counter()
         img_h, img_w = img.shape[:2]
 
+        # No model means no verdict. Slicing a broken detector just produces a
+        # confident-looking empty result, so refuse instead.
+        self.detector.require_model()
+
         all_detections: List[Dict[str, Any]] = []
 
         # 1. Global context pass (resized full image) if requested

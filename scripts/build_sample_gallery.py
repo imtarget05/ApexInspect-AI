@@ -201,6 +201,8 @@ def _qc_ok(det, path: Path, expect: str) -> bool:
     if decoded is None:
         return False
     _, dets, _ = det.infer(decoded)
+    if dets is None:
+        return None  # no verdict: model unavailable
     found = {d["class"] for d in dets}
     return (expect in found) if expect != "pass" else (not dets)
 

@@ -31,10 +31,18 @@ def run_benchmark(n_warmup: int = 5, n_measure: int = 20) -> dict:
         frame, gt = simulator.generate_pcb_frame(inject_defect=True, specific_defect="short_circuit")
         detector.infer(frame, gt)
 
+    if detector.degraded:
+        raise SystemExit(
+            "Model unavailable (%s) - refusing to benchmark a detector that "
+            "cannot produce detections." % (getattr(detector, "load_error", "unknown"))
+        )
+
     latencies = []
     for _ in range(n_measure):
         frame, gt = simulator.generate_pcb_frame(inject_defect=True, specific_defect="short_circuit")
         _, _, lat = detector.infer(frame, gt)
+        if lat is None:
+            continue  # no inference ran; do not record a fabricated latency
         latencies.append(lat)
 
     avg_ms = sum(latencies) / len(latencies)

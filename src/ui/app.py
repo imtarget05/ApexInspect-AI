@@ -397,6 +397,18 @@ with tab_vision:
             st.session_state.last_detections = detections
             st.session_state.last_latency = latency_ms
 
+            if detections is None:
+                # Model unavailable: infer() returned no verdict. Do NOT record a
+                # telemetry row, because a row is what drives the 3-consecutive-
+                # defect trigger, and "not inspected" is not "not defective".
+                st.warning(
+                    "Detection unavailable - no inspection recorded. "
+                    + str(getattr(st.session_state.detector, "load_error", "") or
+                          "the ONNX model could not be loaded.")
+                )
+                step_inspect = False
+                continuous_run = False
+
             # Ingest telemetry & evaluate triggers via unified InspectionService
             is_def = len(detections) > 0
             if is_def:
@@ -457,7 +469,18 @@ with tab_vision:
                 if custom_img is not None:
                     annotated_frame, detections, latency_ms = st.session_state.detector.infer(custom_img)
                     rgb_res = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-                    st.image(rgb_res, caption=f"Kết quả phân tích ảnh tải lên — Độ trễ suy luận: {latency_ms:.1f}ms", use_container_width=True)
+                    if detections is None:
+                        # No verdict: the model never ran, so there is no latency to
+                        # report and nothing to record. Do not present this as a pass.
+                        st.image(rgb_res, use_container_width=True)
+                        reason = getattr(st.session_state.detector, "load_error", "") \
+                            or "the ONNX model could not be loaded."
+                        st.warning(
+                            "No defect verdict - the model is not loaded, so this "
+                            f"image was not inspected. {reason}"
+                        )
+                    else:
+                        st.image(rgb_res, caption=f"Kết quả phân tích ảnh tải lên — Độ trễ suy luận: {latency_ms:.1f}ms", use_container_width=True)
 
                     if detections:
                         st.warning(f"⚠️ Phát hiện **{len(detections)} lỗi** trên ảnh tải lên: `{', '.join([d['class'] for d in detections])}`")
@@ -541,7 +564,17 @@ with tab_vision:
             is_inj, def_name = defect_map[sample_type]
             raw_s, gt_s = st.session_state.simulator.generate_pcb_frame(inject_defect=is_inj, specific_defect=def_name)
             ann_s, dets_s, lat_s = st.session_state.detector.infer(raw_s, gt_s)
-            st.image(cv2.cvtColor(ann_s, cv2.COLOR_BGR2RGB), caption=f"Mẫu: {sample_type} | Độ trễ ONNX: {lat_s:.1f}ms", use_container_width=True)
+            if dets_s is None:
+                # No verdict - the model never ran. Do not caption a fabricated
+                # latency, and do not fall through to the defect branch.
+                st.image(cv2.cvtColor(ann_s, cv2.COLOR_BGR2RGB), use_container_width=True)
+                st.warning(
+                    "No defect verdict - model unavailable: "
+                    + str(getattr(st.session_state.detector, "load_error", "")
+                    or "the ONNX model could not be loaded.")
+                )
+            else:
+                st.image(cv2.cvtColor(ann_s, cv2.COLOR_BGR2RGB), caption=f"Mẫu: {sample_type} | Độ trễ ONNX: {lat_s:.1f}ms", use_container_width=True)
 
             if dets_s:
                 st.warning(f"Phát hiện lỗi: **`{dets_s[0]['class'].upper()}`** (Confidence: {dets_s[0]['confidence']*100:.1f}%)")

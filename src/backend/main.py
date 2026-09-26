@@ -1,6 +1,8 @@
 import os
 import uuid
 import datetime
+import hmac
+import secrets
 from contextlib import asynccontextmanager
 from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, Security, status
@@ -14,8 +16,70 @@ from .models import ProductionLine, InspectionLog, MESTicket
 from .schemas import InspectionCreate, InspectionResponse, ActionApprovalRequest, LineMetricsResponse
 from ..agent.graph import QualityIncidentAgent
 
+_DEVELOPMENT_ENVIRONMENTS = {"", "dev", "development", "local", "test"}
+_ephemeral_api_key: Optional[str] = None
+
+
+def _is_development() -> bool:
+    """True unless APP_ENV/ENVIRONMENT names a deployed environment.
+
+    There was no environment marker in this service before; API_KEY now needs
+    one to fail closed without breaking local work.
+    """
+    raw = os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "development"
+    return raw.strip().lower() in _DEVELOPMENT_ENVIRONMENTS
+
+
+def _expected_api_key() -> str:
+    """The configured API key, or a hard startup failure outside development.
+
+    There is deliberately no committed default. A deployment that forgets
+    API_KEY must fail to start, not run on a credential that is published in
+    this repository. Locally, an unset API_KEY mints a random per-process key
+    so development still works without shipping a well-known secret.
+    """
+    global _ephemeral_api_key
+    raw = os.getenv("API_KEY", "").strip()
+    if raw:
+        return raw
+    if not _is_development():
+        raise RuntimeError(
+            "API_KEY must be set when APP_ENV is not a development environment. "
+            "Generate one with `python -c \"import secrets; print(secrets.token_urlsafe(32))\"` "
+            "and set it in the deployment environment. There is no default: a "
+            "missing key must not silently fall back to a published value."
+        )
+    if _ephemeral_api_key is None:
+        _ephemeral_api_key = secrets.token_urlsafe(32)
+        print(
+            "[security] API_KEY is not set and APP_ENV is a development "
+            f"environment. Using a random ephemeral key for this process only: "
+            f"{_ephemeral_api_key}"
+        )
+    return _ephemeral_api_key
+
+
+def _resolve_cors_origins() -> list:
+    """Explicit origin allowlist. Never a wildcard alongside credentials.
+
+    `allow_origins=["*"]` together with `allow_credentials=True` is rejected by
+    browsers and, where honoured, lets any site read authenticated responses.
+    """
+    raw = os.getenv("CORS_ORIGINS", "")
+    origins = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    if "*" in origins:
+        raise RuntimeError(
+            "CORS_ORIGINS must list explicit origins; the wildcard '*' cannot be "
+            "combined with credentialed requests. List each trusted UI origin, "
+            "comma-separated."
+        )
+    return origins
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail closed before serving anything if the deployment has no API_KEY.
+    _expected_api_key()
     init_db()
     yield
 
@@ -26,12 +90,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+_CORS_ORIGINS = _resolve_cors_origins()
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-API-KEY"],
 )
 
 @app.get("/health")
@@ -92,21 +158,26 @@ from .models import ProductionLine, InspectionLog, MESTicket, AuditLog
 API_KEY_HEADER = APIKeyHeader(name="X-API-KEY", auto_error=False)
 
 def verify_api_key(api_key: Optional[str] = Security(API_KEY_HEADER)) -> Optional[str]:
-    """Validates X-API-KEY for critical industrial action dispatch."""
-    expected = os.getenv("API_KEY", "dev-factory-key-secret").strip()
-    if not expected or expected.lower() in ("none", "development", "disabled"):
-        return api_key
-    if api_key and api_key == expected:
-        return api_key
+    """Validates X-API-KEY for protected industrial routes.
+
+    No default key, and no "disabled" sentinel: an unset API_KEY outside
+    development raises rather than opening the gate. Comparison is
+    constant-time so the key cannot be recovered by timing the endpoint.
+    """
+    expected = _expected_api_key()
     if not api_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing required 'X-API-KEY' authentication header."
         )
+    if hmac.compare_digest(api_key.encode("utf-8"), expected.encode("utf-8")):
+        return api_key
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Invalid 'X-API-KEY' credential."
     )
+
+
 
 # Shared agent and industrial PLC bridge instances
 incident_agent = QualityIncidentAgent()
@@ -120,11 +191,17 @@ except Exception:
 def get_current_utc():
     return datetime.datetime.now(datetime.timezone.utc)
 
-@app.post("/api/v1/inspections", response_model=InspectionResponse)
+@app.post("/api/v1/inspections", response_model=InspectionResponse, dependencies=[Depends(verify_api_key)])
 def record_inspection(payload: InspectionCreate, db: Session = Depends(get_db)):
-    """
-    Ingests defect telemetry from edge camera stream via InspectionService,
-    checks incident triggers, and invokes LangGraph Quality Incident Agent upon cascades.
+    """Ingests defect telemetry from the edge camera stream.
+
+    API-key protected, same as POST /api/v1/mes/action. This is an edge-camera
+    write path, which does not make it public: the row it writes feeds the
+    3-consecutive-defect trigger, and that trigger opens a PENDING_APPROVAL MES
+    ticket whose approval dispatches real PLC actuation (HALT_LINE). An
+    unauthenticated caller could therefore drive the halt-line proposal path
+    simply by posting three defective inspections, so the same credential
+    guards it. Edge agents send the key in X-API-KEY.
     """
     log_entry, incident_triggered, created_ticket_id = InspectionService.record_telemetry(
         db=db,
@@ -167,9 +244,13 @@ def resolve_ticket(payload: ActionApprovalRequest, db: Session = Depends(get_db)
 
     return result
 
-@app.get("/api/v1/lines/{line_id}/metrics", response_model=LineMetricsResponse)
+@app.get("/api/v1/lines/{line_id}/metrics", response_model=LineMetricsResponse, dependencies=[Depends(verify_api_key)])
 def get_line_metrics(line_id: str, db: Session = Depends(get_db)):
-    """Retrieves operational metrics for a production line."""
+    """Operational metrics for a production line (API-key protected).
+
+    Yield rate and defect counts are proprietary line performance data; the
+    endpoint previously exposed them to any unauthenticated caller.
+    """
     line = db.query(ProductionLine).filter(ProductionLine.line_id == line_id).first()
     if not line:
         raise HTTPException(status_code=404, detail="Line not found")
@@ -190,7 +271,10 @@ def get_line_metrics(line_id: str, db: Session = Depends(get_db)):
         avg_inference_ms=round(avg_latency, 2)
     )
 
-@app.get("/api/v1/tickets/recent")
+@app.get("/api/v1/tickets/recent", dependencies=[Depends(verify_api_key)])
 def get_recent_tickets(db: Session = Depends(get_db)):
-    """Fetches recently triggered tickets."""
+    """Fetches recently triggered tickets (API-key protected).
+
+    Ticket ids, thread ids and trigger reasons are internal incident data.
+    """
     return db.query(MESTicket).order_by(desc(MESTicket.created_at)).limit(10).all()

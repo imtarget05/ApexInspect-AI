@@ -111,6 +111,17 @@ class TestVisionPipeline(unittest.TestCase):
 
 
 def test_infer_does_not_fake_gt_in_production(monkeypatch):
+    """SECURITY BEHAVIOUR CHANGE (explicit).
+
+    This test previously asserted `dets == []` for a detector with no model.
+    An empty list is indistinguishable from "inspected the board, found no
+    defects", and render_annotations() labelled exactly that case
+    "STATUS: PASS (NO DEFECTS)" with a fabricated 25 ms latency -- a clean bill
+    of health for a detector that never ran. The no-verdict result is now None,
+    which is distinct from [], and the assertion is updated accordingly. The
+    original intent (never substitute ground truth for a detection) is kept and
+    strengthened.
+    """
     import numpy as np
     from src.vision.detector import PCBDefectDetector
     monkeypatch.setenv("ALLOW_GT_FALLBACK", "false")
@@ -119,8 +130,13 @@ def test_infer_does_not_fake_gt_in_production(monkeypatch):
     det.session = None
     det.conf_threshold = 0.50
     frame = np.zeros((640, 640, 3), dtype=np.uint8)
-    _, dets, _ = det.infer(frame, ground_truth_defects=[{"class": "short_circuit", "bbox": [1, 1, 10, 10], "confidence": 0.9}])
-    assert dets == []
+    ground_truth = [{"class": "short_circuit", "bbox": [1, 1, 10, 10], "confidence": 0.9}]
+    _, dets, latency = det.infer(frame, ground_truth_defects=ground_truth)
+    # Ground truth is never substituted for a detection.
+    assert dets != ground_truth
+    assert dets is None, "no model means no verdict, which must not be [] (a pass)"
+    # And no fabricated latency.
+    assert latency is None
 
 if __name__ == "__main__":
     unittest.main()

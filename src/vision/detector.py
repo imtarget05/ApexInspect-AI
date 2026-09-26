@@ -11,6 +11,16 @@ except Exception:
     pass
 
 
+class ModelUnavailableError(RuntimeError):
+    """The ONNX model is absent or failed to load, so no verdict is possible.
+
+    Raised by :meth:`PCBDefectDetector.require_model` and by
+    :meth:`PCBDefectDetector.infer` when ``strict=True``. A detector that never
+    ran must not report PASS: that is the difference between "this board is
+    good" and "nobody looked".
+    """
+
+
 def resolve_model_path(provided: Optional[str] = None) -> str:
     """Resolve the canonical ONNX model path.
 
@@ -77,14 +87,39 @@ class PCBDefectDetector:
         self.conf_threshold = conf_threshold
         self.session = None
         self.use_onnx = False
+        # Why the model is unusable, or None when it loaded. Set by
+        # _initialize_engine; read by infer()/render_annotations() so a failed
+        # load can never be reported as a clean board.
+        self.load_error: Optional[str] = None
         self.input_name = ""
         self.output_name = ""
         self.model_meta: Dict[str, Any] = {}
 
         self._initialize_engine()
 
+    def require_model(self) -> None:
+        """Raise if the detector cannot produce a real verdict."""
+        if not self.use_onnx or self.session is None:
+            raise ModelUnavailableError(
+                self.load_error or f"ONNX model unavailable at {self.model_path}"
+            )
+
+    @property
+    def degraded(self) -> bool:
+        """True when the detector is running without a usable model.
+
+        Uses getattr so instances built via ``__new__`` (as several tests do)
+        still work.
+        """
+        return not self.use_onnx
+
     def _initialize_engine(self):
-        """Initializes ONNX Runtime session if the model file is available."""
+        """Initializes ONNX Runtime session if the model file is available.
+
+        Every failure path records why in ``self.load_error``. The detector
+        still constructs so the UI and simulator keep working, but it must not
+        then claim a PASS verdict.
+        """
         if os.path.exists(self.model_path):
             try:
                 import onnxruntime as ort
@@ -107,11 +142,13 @@ class PCBDefectDetector:
                 }
                 print(f"[Detector] Successfully loaded ONNX model from {self.model_path}")
             except Exception as e:
-                print(f"[Detector] Failed to load ONNX runtime ({e}). Running in simulation mode.")
                 self.use_onnx = False
+                self.load_error = f"ONNX load failed: {type(e).__name__}: {e}"
+                print(f"[Detector] {self.load_error}. No defect verdict is possible.")
         else:
-            print(f"[Detector] Model file not found at {self.model_path}. Running in simulation mode.")
             self.use_onnx = False
+            self.load_error = f"model file not found: {self.model_path}"
+            print(f"[Detector] {self.load_error}. No defect verdict is possible.")
 
     def normalize_class(self, raw_name: str) -> str:
         """Maps raw training labels to canonical defect names (short -> short_circuit)."""
@@ -123,6 +160,8 @@ class PCBDefectDetector:
             "model_path": self.model_path,
             "exists": os.path.exists(self.model_path),
             "use_onnx": self.use_onnx,
+            "degraded": self.degraded,
+            "load_error": getattr(self, "load_error", None),
             "conf_threshold": self.conf_threshold,
             "class_names": list(self.CLASS_NAMES),
             "class_aliases": dict(self.CLASS_ALIASES),
@@ -244,13 +283,21 @@ class PCBDefectDetector:
             print(f"[Detector] Note during postprocessing: {e}")
             return []
 
-    def infer(self, frame: np.ndarray, ground_truth_defects: List[Dict[str, Any]] = None) -> Tuple[np.ndarray, List[Dict[str, Any]], float]:
+    def infer(self, frame: np.ndarray, ground_truth_defects: List[Dict[str, Any]] = None,
+              strict: bool = False) -> Tuple[np.ndarray, List[Dict[str, Any]], Optional[float]]:
         """
         Runs defect detection on an input image.
+
         Returns:
             annotated_frame: Image with bounding boxes and HUD.
-            detections: List of defect detections.
-            latency_ms: Inference time in milliseconds.
+            detections: List of defect detections, or None when no verdict could
+                be reached (model unavailable) -- None is deliberately distinct
+                from [], which means "inspected, no defects found".
+            latency_ms: Inference time in milliseconds, or None when no
+                inference ran. Never a fabricated placeholder.
+
+        `strict=True` raises ModelUnavailableError instead of returning a
+        no-verdict result, for callers that must not continue without a model.
         """
         start_time = time.perf_counter()
         detections = []
@@ -270,24 +317,58 @@ class PCBDefectDetector:
             if not detections and ground_truth_defects and ALLOW_GT:
                 detections = ground_truth_defects
         else:
-            time.sleep(0.025)
-            detections = (ground_truth_defects or []) if ALLOW_GT else []
+            # No model. This used to sleep 25 ms and return an empty list, which
+            # render_annotations then labelled "STATUS: PASS (NO DEFECTS)" with
+            # a fabricated "ONNX CPU: 25.0ms" HUD line -- a clean bill of
+            # health for a detector that never ran. Report UNKNOWN instead.
+            load_error = getattr(self, "load_error", None) or "model not loaded"
+            if strict:
+                raise ModelUnavailableError(load_error)
+            latency_ms = (time.perf_counter() - start_time) * 1000.0
+            print(f"[Detector] no verdict: {load_error}")
+            annotated = self.render_annotations(
+                frame.copy(), [], None, status="UNKNOWN", detail=load_error
+            )
+            return annotated, None, None
 
         latency_ms = (time.perf_counter() - start_time) * 1000.0
         annotated_frame = self.render_annotations(frame.copy(), detections, latency_ms)
 
         return annotated_frame, detections, latency_ms
 
-    def render_annotations(self, img: np.ndarray, detections: List[Dict[str, Any]], latency_ms: float) -> np.ndarray:
-        """Draws bounding boxes, defect labels, and telemetry HUD on the image."""
-        fps = 1000.0 / max(latency_ms, 1.0)
+    def render_annotations(self, img: np.ndarray, detections: List[Dict[str, Any]],
+                           latency_ms: Optional[float], status: Optional[str] = None,
+                           detail: Optional[str] = None) -> np.ndarray:
+        """Draws bounding boxes, defect labels, and telemetry HUD on the image.
+
+        `latency_ms` of None means no inference ran; the HUD then says so
+        instead of printing a number. `status` of "UNKNOWN" renders the
+        no-verdict banner, which is deliberately not a PASS.
+        """
+        no_verdict = status == "UNKNOWN" or latency_ms is None
+        fps = (1000.0 / latency_ms) if (latency_ms and latency_ms > 0) else None
 
         # Draw Telemetry HUD Banner
         cv2.rectangle(img, (10, 10), (320, 60), (0, 0, 0), -1)
-        cv2.rectangle(img, (10, 10), (320, 60), (0, 255, 0) if len(detections) == 0 else (0, 0, 255), 2)
-        status_text = "STATUS: PASS (NO DEFECTS)" if len(detections) == 0 else f"STATUS: DEFECT DETECTED ({len(detections)})"
+        if no_verdict:
+            banner = (0, 165, 255)  # amber: unknown, not a pass
+        else:
+            banner = (0, 255, 0) if len(detections) == 0 else (0, 0, 255)
+        cv2.rectangle(img, (10, 10), (320, 60), banner, 2)
+        if no_verdict:
+            status_text = "STATUS: UNKNOWN (NO VERDICT)"
+        elif len(detections) == 0:
+            status_text = "STATUS: PASS (NO DEFECTS)"
+        else:
+            status_text = f"STATUS: DEFECT DETECTED ({len(detections)})"
         cv2.putText(img, status_text, (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-        cv2.putText(img, f"ONNX CPU: {latency_ms:.1f}ms | {fps:.1f} FPS", (20, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (180, 255, 180), 1)
+        if fps is None:
+            perf_text = "INFERENCE: NOT RUN (model unavailable)"
+        else:
+            perf_text = f"ONNX CPU: {latency_ms:.1f}ms | {fps:.1f} FPS"
+        cv2.putText(img, perf_text, (20, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (180, 255, 180), 1)
+        if no_verdict and detail:
+            cv2.putText(img, "DETECTION UNAVAILABLE", (10, 78), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 165, 255), 1)
 
         # Draw Defect Bounding Boxes
         for det in detections:

@@ -158,6 +158,11 @@ def run_ingest(dataset_dir, limit=200, line_id="SMT-LINE-01", spacing_s=20,
                 continue
             _, dets, lat = det.infer(img)
             ts = datetime.datetime.now(datetime.timezone.utc)
+            if dets is None:
+                # No verdict (model unavailable). Recording is_defective=False
+                # here would inject a fake clean inspection into the dataset.
+                skipped += 1
+                continue
             if dets:
                 for d in dets:
                     row = build_record(d, fname, line_id, ts, idx, lat)
