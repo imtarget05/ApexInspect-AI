@@ -13,8 +13,17 @@ VALID_KEY = "unit-test-factory-key-0123456789"
 
 @pytest.fixture()
 def client(monkeypatch):
+    """A client against a freshly created test database.
+
+    `init_db()` is required: TestClient does not run the app lifespan unless it
+    is used as a context manager, so the tables would not exist on a clean
+    checkout. This mirrors `tests/test_backend.py::setUp`.
+    """
+    from src.backend.database import init_db
+
     monkeypatch.setenv("API_KEY", VALID_KEY)
     monkeypatch.setenv("APP_ENV", "development")
+    init_db()
     return TestClient(backend_main.app)
 
 
