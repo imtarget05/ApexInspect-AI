@@ -114,7 +114,9 @@ def test_guard_does_not_hijack_normal_processes():
                 capture_output=True, text=True, timeout=120,
             )
             assert proc.returncode == 0, proc.stderr[-1500:]
-            assert f"POLICY_ENGINE=sqlite:///{sqlite_path}" in proc.stdout, (
+            import urllib.parse
+            unquoted_stdout = urllib.parse.unquote(proc.stdout)
+            assert f"POLICY_ENGINE=sqlite:///{sqlite_path}" in unquoted_stdout, (
                 "guard hijacked a non-test process:\n" + proc.stdout[-800:]
             )
         finally:
