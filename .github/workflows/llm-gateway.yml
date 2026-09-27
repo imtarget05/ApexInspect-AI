@@ -1,0 +1,102 @@
+name: LLM Gateway
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths: ['llm-gateway/**', 'observability/**']
+  pull_request:
+    branches: [main, master, develop]
+    paths: ['llm-gateway/**', 'observability/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: llm-gateway-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: llm-gateway
+
+jobs:
+  test:
+    # The gateway is vendored in this repo so that cloning the repo is enough to
+    # run the whole stack (see llm-gateway/README.md). Same gate as the gateway's
+    # own CI: fast tests only, coverage ratchet, live tests are manual.
+    name: gateway pytest (fast) + coverage ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: llm-gateway/requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install pytest-cov
+
+      - name: Syntax + whitespace gate
+        run: |
+          set -euo pipefail
+          python -m py_compile server.py metrics.py tests/*.py
+          if grep -rn --include='*.py' -E ' +$' server.py metrics.py tests/; then
+            echo "trailing whitespace found"
+            exit 1
+          fi
+
+      - name: Run tests (fast only) with coverage ratchet
+        run: python -m pytest tests/ -q -m "not live and not infra" --strict-markers --cov=. --cov-report=term-missing --cov-fail-under=85
+
+  live-tests:
+    # Live/infra tests need a running gateway and a reachable LLM upstream, so
+    # they are manual-trigger only and never gate a push.
+    name: gateway live/infra tests (manual)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    env:
+      LIVE_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run live/infra tests
+        run: python -m pytest tests/ -q -m "live or infra" --strict-markers --tb=short
+
+  observability-config:
+    # Docker is not started in CI, so the observability stack is validated by
+    # parsing every YAML/JSON it ships. That is what actually breaks in review.
+    name: observability config parses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install parsers
+        run: python -m pip install --upgrade pip pyyaml
+
+      - name: Parse observability configs
+        run: |
+          set -euo pipefail
+          cd observability
+          python scripts/validate_configs.py

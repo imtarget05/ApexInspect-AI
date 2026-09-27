@@ -1,0 +1,33 @@
+# CI-live — llm-gateway live/infra tests. MANUAL TRIGGER ONLY
+# (workflow_dispatch): these tests need a live gateway or LAN upstream and
+# must never run on push/PR. No coverage gate here (report-only run).
+name: CI-live (manual — live/infra tests)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-tests:
+    name: Live/infra tests (manual trigger only)
+    runs-on: ubuntu-latest
+    env:
+      LIVE_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run live/infra tests (no fail-under)
+        run: python -m pytest tests/ -q -m "live or infra" --strict-markers --tb=short

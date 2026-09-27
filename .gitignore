@@ -66,3 +66,6 @@ notebooks/best.pt
 notebooks/confusion_matrix.png
 notebooks/results.png
 notebooks/data.yaml
+
+# eval run artifacts (CI uploads these, never committed)
+eval/reports/

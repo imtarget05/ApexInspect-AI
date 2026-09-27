@@ -9,6 +9,13 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 DEFAULT_LOCAL_MODEL = "qwen2.5:3b"
 MAX_PROMPT_WORDS = 150  # keep local synthesis prompt short for 3b models
 
+# Local LAN LLM via OpenAI-compatible /v1/chat/completions (LM Studio on the
+# M1 Pro, or the llm-gateway proxy in front of it). Selected with
+# APEX_LLM_MODE=local_openai (aliases: lmstudio, lms).
+DEFAULT_LMSTUDIO_BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://192.168.1.8:1234/v1")
+DEFAULT_LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "qwen2.5-vl-3b-instruct")
+LMSTUDIO_TIMEOUT = float(os.getenv("LMSTUDIO_TIMEOUT", "120"))
+
 class RCALLMProvider(ABC):
     @abstractmethod
     def synthesize_rca(self, system_prompt: str, user_content: str) -> str:
@@ -83,6 +90,61 @@ class LocalOllamaProvider(RCALLMProvider):
             HumanMessage(content=capped_content),
         ])
         return response.content
+
+class LocalOpenAICompatProvider(RCALLMProvider):
+    """Local LAN synthesis over OpenAI-compatible /v1/chat/completions (LM Studio).
+
+    Same contract as ``LocalOllamaProvider`` but speaks the OpenAI wire format, so
+    it works against LM Studio on the M1 Pro or the ``llm-gateway`` proxy in front
+    of it. Stdlib-free (uses ``requests``, already a runtime dependency).
+    """
+
+    def __init__(self, model_name: str = "", base_url: str = ""):
+        self.model_name = (
+            (model_name or os.getenv("LMSTUDIO_MODEL", "") or DEFAULT_LMSTUDIO_MODEL).strip()
+            or DEFAULT_LMSTUDIO_MODEL
+        )
+        base = (base_url or os.getenv("LMSTUDIO_BASE_URL", "") or DEFAULT_LMSTUDIO_BASE_URL).strip()
+        base = base.rstrip("/")
+        if base.endswith("/chat/completions"):
+            base = base[: -len("/chat/completions")]
+        self.base_url = base or DEFAULT_LMSTUDIO_BASE_URL
+        self.temperature = 0.1
+        self.num_predict = 256
+        self.timeout = LMSTUDIO_TIMEOUT
+
+    def _cap_words(self, text: str, limit: int = MAX_PROMPT_WORDS) -> str:
+        words = (text or "").split()
+        if len(words) <= limit:
+            return text
+        return " ".join(words[:limit])
+
+    def synthesize_rca(self, system_prompt: str, user_content: str) -> str:
+        import requests
+
+        capped_content = self._cap_words(user_content)
+        r = requests.post(
+            f"{self.base_url}/chat/completions",
+            headers={"Content-Type": "application/json", "X-Project": "ApexInspect-AI"},
+            json={
+                "model": self.model_name,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": capped_content},
+                ],
+                "temperature": self.temperature,
+                "max_tokens": self.num_predict,
+                "stream": False,
+            },
+            timeout=self.timeout,
+        )
+        r.raise_for_status()
+        choices = r.json().get("choices") or []
+        content = (choices[0].get("message", {}).get("content", "") if choices else "") or ""
+        if not content.strip():
+            raise ValueError("empty completion from local OpenAI-compatible endpoint")
+        return content
+
 
 class DeterministicProvider(RCALLMProvider):
     def synthesize_rca(self, system_prompt: str, user_content: str) -> str:

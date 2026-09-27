@@ -1,0 +1,3 @@
+# Test-only dependencies. Runtime deps are in requirements.txt (fastapi, uvicorn, httpx).
+-r requirements.txt
+pytest>=8.0

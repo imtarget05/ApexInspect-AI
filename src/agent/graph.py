@@ -10,6 +10,7 @@ from .rag import SOPRetriever
 from .prompts import QUALITY_AGENT_SYSTEM_PROMPT
 from .subagents import SOPResearchAgent, RCAAnalysisAgent, InterventionGovernanceAgent
 from .checkpointer import IncidentCheckpointer
+from .memory import IncidentMemory
 from ..runtime_flags import effective_groq_key
 
 
@@ -19,6 +20,7 @@ class AgentState(TypedDict, total=False):
     consecutive_count: int
     sop_citations: List[str]
     sop_context: str
+    history_context: str
     rca_analysis: str
     proposed_action: str
     requires_hitl: bool
@@ -51,6 +53,8 @@ class QualityIncidentAgent:
         self.retriever = self.sop_agent.retriever
         self.checkpointer = MemorySaver()
         self.incident_store = checkpointer or IncidentCheckpointer()
+        # Advisory only: history informs the RCA prompt, never proposed_action.
+        self.memory = IncidentMemory()
         self.graph = self._build_graph()
 
     def _build_graph(self):
@@ -59,6 +63,7 @@ class QualityIncidentAgent:
 
         # 1. Add Workflow Nodes
         builder.add_node("retrieve_sop", self.sop_agent.run)
+        builder.add_node("load_history", self._node_load_history)
         builder.add_node("synthesize_rca", self.rca_agent.run)
         builder.add_node("propose_action", self.intervention_agent.run)
         builder.add_node("await_supervisor_approval", self._node_await_supervisor_approval)
@@ -66,13 +71,32 @@ class QualityIncidentAgent:
 
         # 2. Add Workflow Edges
         builder.add_edge(START, "retrieve_sop")
-        builder.add_edge("retrieve_sop", "synthesize_rca")
+        builder.add_edge("retrieve_sop", "load_history")
+        builder.add_edge("load_history", "synthesize_rca")
         builder.add_edge("synthesize_rca", "propose_action")
         builder.add_edge("propose_action", "await_supervisor_approval")
         builder.add_edge("await_supervisor_approval", "execute_factory_action")
         builder.add_edge("execute_factory_action", END)
 
         return builder.compile(checkpointer=self.checkpointer)
+
+    def _node_load_history(self, state: AgentState) -> Dict[str, Any]:
+        """Pull past interventions on this line for the RCA prompt.
+
+        Advisory by construction: this node writes only ``history_context`` and
+        never touches ``proposed_action``, so a stale or poisoned memory row can
+        never escalate into a production-line stop. ``context_for`` already
+        swallows its own errors; the extra try keeps a memory outage from
+        failing the whole incident.
+        """
+        try:
+            context = self.memory.context_for(
+                state.get("line_id", "SMT-LINE-01"),
+                state.get("defect_class", "defect"),
+            )
+        except Exception:
+            context = ""
+        return {"history_context": context}
 
     def _node_await_supervisor_approval(self, state: AgentState) -> Dict[str, Any]:
         """Halts the StateGraph using LangGraph's native interrupt() primitive until a supervisor signs off."""
@@ -209,7 +233,36 @@ class QualityIncidentAgent:
             }, ticket_id=ticket_id)
         except Exception:
             pass
+        # Learn from the resolved incident so the next one on this line has context.
+        # Only a completed approval cycle is recorded; the interrupt() pending
+        # state in `run()` is deliberately not, or an unresolved proposal would
+        # pollute history with actions nobody took.
+        self._remember_incident(thread_id, resumed_state, supervisor_id, persisted)
         return resumed_state
+
+    def _remember_incident(
+        self,
+        thread_id: str,
+        state: Dict[str, Any],
+        supervisor_id: str,
+        persisted: Optional[Dict[str, Any]],
+    ) -> None:
+        """Persist one resolved incident to advisory memory. Never raises."""
+        try:
+            line_id = (persisted or {}).get("line_id") or state.get("line_id")
+            defect_class = (persisted or {}).get("defect_class") or state.get("defect_class")
+            if not line_id:
+                return
+            self.memory.record(
+                line_id=line_id,
+                defect_class=defect_class or "unknown",
+                action=state.get("proposed_action", ""),
+                approval_status=state.get("approval_status", "PENDING"),
+                approved_by=supervisor_id,
+                thread_id=thread_id,
+            )
+        except Exception:
+            pass
 
 
 QualityIncidentOrchestrator = QualityIncidentAgent

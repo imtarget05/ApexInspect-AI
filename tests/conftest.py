@@ -46,6 +46,11 @@ _CV2_DEPENDENT_TEST_FILES = frozenset(
         "test_stream.py",
         "test_sample_gallery.py",
         "test_patching.py",
+        # Imports `src.vision.detector` at module level (which imports cv2), so it
+        # must be ignored too. Without this entry a machine without OpenCV cannot
+        # even START the suite: the ModuleNotFoundError is raised during
+        # collection, before the per-item `vision` skip marker can apply.
+        "test_detector_fail_closed.py",
     }
 )
 

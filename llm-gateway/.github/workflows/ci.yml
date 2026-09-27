@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Fast job: excludes live/infra-marked tests (they need a live gateway or
+    # LAN upstream and run in ci-live.yml, manual trigger only). Markers
+    # `live`/`infra` are registered in pytest.ini, hence --strict-markers.
+    # Coverage ratchet: measured TOTAL 94% / server.py 89% → hard floor at 85%
+    # (term-missing keeps per-line gaps visible in the log).
+    name: pytest (fast) + coverage ratchet (fail-under=85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install pytest-cov
+
+      - name: Syntax + whitespace gate (offline substitute for ruff)
+        # No ruff binary is available in the offline dev env (and this repo
+        # ships no ruff config), so `ruff --select E,F` cleanliness on
+        # server.py/metrics.py/tests could not be verified here. This gate
+        # (py_compile + trailing-whitespace) is the honest offline
+        # substitute and BLOCKS on failure; ratchet it up to
+        # `ruff check --select E,F .` once ruff is available in CI.
+        run: |
+          set -euo pipefail
+          python -m py_compile server.py metrics.py tests/*.py
+          if grep -rn --include='*.py' -E ' +$' server.py metrics.py tests/; then
+            echo "❌ trailing whitespace found — run: sed -i 's/[[:space:]]*$//' <file>"
+            exit 1
+          fi
+          echo "✅ py_compile + no trailing whitespace"
+
+      - name: Run tests (fast only) with coverage ratchet
+        run: python -m pytest tests/ -q -m "not live and not infra" --strict-markers --cov=. --cov-report=term-missing --cov-fail-under=85
+
+  gitleaks:
+    # Secret scanning — HARD GATE (default config). Fails the build on leaks.
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+
+  pip-audit:
+    # Dependency audit — ADVISORY (continue-on-error) until triaged.
+    # The offline dev env means advisories cannot be pre-triaged here, so a
+    # hard gate would fail the build on unactionable findings. Ratchets to
+    # blocking (remove continue-on-error) after triage — see HARD_TEST_REPORT.
+    name: Dependency audit (pip-audit, advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Run pip-audit (advisory — see job comment)
+        continue-on-error: true
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+          pip-audit -r requirements.txt

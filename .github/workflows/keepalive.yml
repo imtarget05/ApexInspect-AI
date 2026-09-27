@@ -1,0 +1,39 @@
+# Keepalive — defeats Render free-tier sleep (services spin down after ~15 min
+# idle; the first request after sleep takes 30-60s cold start).
+#
+# This workflow pings the service /health URL every 14 minutes (inside the
+# 15-min idle window) plus on manual dispatch. The URL comes from the
+# RENDER_HEALTH_URL_APEXINSPECT secret (Settings → Secrets → Actions); the
+# default below is a placeholder — replace it with the real service URL after
+# the first Render deploy. The static dashboard does not sleep (CDN) so only
+# the API is pinged.
+#
+# Forks without GitHub Actions: use https://cron-job.org instead — create a
+# free account, add a GET job to <your-service-url>/health/live every
+# 14 minutes.
+name: Keepalive
+
+"on":
+  schedule:
+    - cron: "*/14 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    name: Ping Render health endpoint
+    runs-on: ubuntu-latest
+    env:
+      RENDER_HEALTH_URL_APEXINSPECT: ${{ secrets.RENDER_HEALTH_URL_APEXINSPECT }}
+    steps:
+      - name: Ping apexinspect-api (best-effort)
+        run: |
+          set -euo pipefail
+          URL="${RENDER_HEALTH_URL_APEXINSPECT:-https://apexinspect-api.onrender.com/health/live}"
+          echo "Pinging $URL"
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 30 "$URL" || echo "000")
+          echo "→ HTTP $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "::warning::Keepalive ping to $URL returned HTTP $STATUS (expected 200)."
+          else
+            echo "Service awake."
+          fi

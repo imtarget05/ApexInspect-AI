@@ -35,14 +35,121 @@ jobs:
       - name: Show installed versions
         run: pip list | grep -Ei 'fastapi|opencv|onnxruntime|langgraph|langchain|sqlalchemy|streamlit|chromadb|pytest'
 
-      - name: Run test suite (vision simulator + detector, FastAPI ingestion, LangGraph agent)
-        run: python -m pytest tests/ -q --tb=short
+      - name: Run test suite (fast only — live/infra run in ci-live.yml; vision simulator + detector, FastAPI ingestion, LangGraph agent)
+        # Test isolation: live/infra-marked tests need real LLM/infra endpoints
+        # and never run in the default job (markers registered in pytest.ini,
+        # hence --strict-markers).
+        run: python -m pytest tests/ -q --tb=short -m "not live and not infra" --strict-markers
 
       # Plan 2026-09-18 safety gates: simulation-only PLC honesty, idempotent
       # approval-to-actuation, and persistent approval-resume. These fail the
       # build if a hardware write can ever be reported as success.
       - name: Safety gates (PLC honesty / idempotent actuation / persistent approval)
         run: python -m pytest tests/test_plc_bridge.py tests/test_approval_safety.py tests/test_agent.py tests/test_backend.py tests/test_llm_guard.py -q --tb=short
+
+  agent-eval:
+    # HARD GATE. The agent's decision has a physical consequence: HALT_LINE stops
+    # a production line, ROUTE_REWORK diverts product. A regression here is not a
+    # failing unit test, it is a scrapped shift, so this runs separately from the
+    # main suite and fails the build on 100% decision accuracy / 0% hallucination.
+    name: Agent eval gate (decision + grounding + hallucination)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # --strict is what turns the report into a gate: it exits non-zero unless
+      # every golden case passes on all four independent checks. The run is
+      # deterministic (APEX_LLM_MODE unset => offline RCA templates), so it needs
+      # no API key and no network.
+      - name: Run eval harness (strict)
+        env:
+          APEX_LLM_MODE: deterministic
+          GROQ_API_KEY: gsk_your_groq_api_key_here
+        run: python -m eval.run --strict --report eval/reports/agent-eval.json
+
+      - name: Upload eval report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-eval-report
+          path: eval/reports/
+          if-no-files-found: warn
+
+  coverage:
+    # Coverage ratchet, phase 1: unmeasured baseline → report-only (NO
+    # fail-under) until a baseline is locked. No codecov upload: this repo
+    # does not use codecov (coverage.xml kept as a CI artifact instead).
+    name: Python — coverage (report-only, no fail-under)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Run tests with coverage (fast only, report-only)
+        run: python -m pytest tests/ -q --tb=short -m "not live and not infra" --strict-markers --cov=src --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: warn
+
+  gitleaks:
+    # Secret scanning — HARD GATE (default config). Fails the build on leaks.
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+
+  pip-audit:
+    # Dependency audit — ADVISORY (continue-on-error) until triaged.
+    # The offline dev env means advisories cannot be pre-triaged here, so a
+    # hard gate would fail the build on unactionable findings. Ratchets to
+    # blocking (remove continue-on-error) after triage — see HARD_TEST_REPORT.
+    name: Dependency audit (pip-audit, advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Run pip-audit (advisory — see job comment)
+        continue-on-error: true
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+          pip-audit -r requirements.txt
 
   docker-build:
     name: Docker — image build smoke test

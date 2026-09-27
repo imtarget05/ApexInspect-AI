@@ -1,0 +1,59 @@
+# Self-contained observability stack for ApexInspect-AI.
+#
+#   docker compose up -d      # Prometheus :9103  Grafana :3203  Alertmanager :9303
+#   docker compose down -v     # stop and drop the TSDB
+#
+# Scrape targets are the services THIS repo runs (see prometheus/prometheus.yml).
+# A target that is not running shows as DOWN and never breaks the scrape loop.
+services:
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: apexinspect-prometheus
+    restart: unless-stopped
+    ports:
+      - "${PROMETHEUS_PORT:-9103}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: apexinspect-grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3203}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: apexinspect-alertmanager
+    restart: unless-stopped
+    ports:
+      - "${ALERTMANAGER_PORT:-9303}:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+
+volumes:
+  prometheus-data:
+  grafana-data:

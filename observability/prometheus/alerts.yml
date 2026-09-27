@@ -1,0 +1,63 @@
+# Alert rules - standard PromQL only. The `services` group is generic;
+# the `gateway` group only exists in repos that vendor llm-gateway/.
+groups:
+
+  - name: gateway
+    interval: 15s
+    rules:
+      - alert: GatewayDown
+        expr: max by (upstream) (llm_upstream_up) == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LLM upstream unavailable"
+          description: "llm_upstream_up == 0 for more than 1m (upstream={{ $labels.upstream }})."
+
+      - alert: GatewayScrapeDown
+        expr: up{job="llm-gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "llm-gateway scrape target down"
+          description: "Prometheus cannot scrape the vendored llm-gateway /metrics."
+
+      - alert: HighErrorRate
+        expr: sum by (project) (rate(llm_requests_total{status=~"5.."}[5m])) / sum by (project) (rate(llm_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 5xx ratio on {{ $labels.project }}"
+          description: "5xx share of llm_requests_total above 5% for 5m."
+
+      - alert: LatencyP95
+        expr: histogram_quantile(0.95, sum by (le, project) (rate(llm_latency_seconds_bucket[5m]))) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P95 latency above 2s on {{ $labels.project }}"
+          description: "histogram_quantile(0.95, llm_latency_seconds) > 2s for 5m."
+
+      - alert: CircuitOpen
+        expr: max by (upstream) (llm_circuit_breaker_open) == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Circuit breaker open"
+          description: "llm_circuit_breaker_open == 1 for upstream={{ $labels.upstream }}."
+
+  - name: services
+    interval: 15s
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service down: {{ $labels.job }}"
+          description: "Scrape target job={{ $labels.job }} (instance={{ $labels.instance }}) down for 2m."

@@ -271,6 +271,43 @@ def get_line_metrics(line_id: str, db: Session = Depends(get_db)):
         avg_inference_ms=round(avg_latency, 2)
     )
 
+@app.get("/metrics")
+def prometheus_metrics(db: Session = Depends(get_db)):
+    """Prometheus text exposition (unauthenticated, aggregate-only, no PII).
+
+    Scraped by observability/prometheus. Contains only aggregate counters:
+    totals per line and status, never per-inspection proprietary detail rows.
+    """
+    from fastapi.responses import PlainTextResponse
+
+    lines = db.query(ProductionLine).all()
+    totals = db.query(InspectionLog).all()
+    n_total = len(totals)
+    n_defects = sum(1 for log in totals if log.is_defective)
+    avg_ms = (sum(log.inference_time_ms for log in totals) / n_total) if n_total else 0.0
+
+    out = [
+        "# HELP apex_inspections_total Total inspections recorded.",
+        "# TYPE apex_inspections_total counter",
+        f"apex_inspections_total {n_total}",
+        "# HELP apex_defects_total Total defective units.",
+        "# TYPE apex_defects_total counter",
+        f"apex_defects_total {n_defects}",
+        "# HELP apex_yield_rate_ratio Yield rate (0..1).",
+        "# TYPE apex_yield_rate_ratio gauge",
+        f"apex_yield_rate_ratio {(((n_total - n_defects) / n_total) if n_total else 1.0):.4f}",
+        "# HELP apex_avg_inference_ms Average inference latency.",
+        "# TYPE apex_avg_inference_ms gauge",
+        f"apex_avg_inference_ms {avg_ms:.2f}",
+        "# HELP apex_line_status Line status (1=RUNNING, 0=STOPPED).",
+        "# TYPE apex_line_status gauge",
+    ]
+    for line in lines:
+        running = 1 if str(line.status).upper() in ("RUNNING", "ACTIVE", "1") else 0
+        out.append(f'apex_line_status{{line="{line.line_id}",name="{line.name}"}} {running}')
+    return PlainTextResponse("\n".join(out) + "\n", media_type="text/plain; version=0.0.4")
+
+
 @app.get("/api/v1/tickets/recent", dependencies=[Depends(verify_api_key)])
 def get_recent_tickets(db: Session = Depends(get_db)):
     """Fetches recently triggered tickets (API-key protected).

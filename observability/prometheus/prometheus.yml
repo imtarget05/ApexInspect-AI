@@ -1,0 +1,31 @@
+# Prometheus scrape config - apexinspect only.
+# Apps run on the Docker host (or in their own compose stack); this stack
+# only observes. host.docker.internal reaches them from inside the container.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+scrape_configs:
+  - job_name: 'prometheus'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # LLM gateway: vendored under llm-gateway/ in this repo.
+  - job_name: 'llm-gateway'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['host.docker.internal:8787']
+
+  - job_name: 'apexinspect'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['host.docker.internal:7860']

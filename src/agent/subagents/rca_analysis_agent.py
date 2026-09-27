@@ -4,7 +4,12 @@ import os
 from typing import Dict, Any, List
 from ..prompts import QUALITY_AGENT_SYSTEM_PROMPT
 from ...runtime_flags import effective_groq_key
-from ..llm_provider import CloudGroqProvider, LocalOllamaProvider, RCALLMProvider
+from ..llm_provider import (
+    CloudGroqProvider,
+    LocalOllamaProvider,
+    LocalOpenAICompatProvider,
+    RCALLMProvider,
+)
 
 
 class RCAAnalysisAgent:
@@ -30,7 +35,13 @@ class RCAAnalysisAgent:
         elif self.llm_mode == "local":
             # Local default: qwen2.5:3b via Ollama (M1 Pro 16GB, offline-safe).
             return LocalOllamaProvider(model_name=os.getenv("LOCAL_MODEL", "qwen2.5:3b"))
-        
+        elif self.llm_mode in ("local_openai", "lmstudio", "lms"):
+            # Local LAN OpenAI-compatible endpoint (LM Studio / llm-gateway).
+            return LocalOpenAICompatProvider(
+                model_name=os.getenv("LMSTUDIO_MODEL", ""),
+                base_url=os.getenv("LMSTUDIO_BASE_URL", ""),
+            )
+
         return None
 
     def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
@@ -40,14 +51,20 @@ class RCAAnalysisAgent:
         line_id = state["line_id"]
         sop_context = state.get("sop_context", "")
         citations = state.get("sop_citations", [])
+        # Advisory incident history (see src/agent/memory.py). Fed to the LLM only:
+        # the deterministic fallback below is byte-identical with or without it,
+        # so the eval gate's grounding/hallucination scoring stays reproducible.
+        history_context = state.get("history_context", "")
 
-        if self.llm_mode in ["cloud", "local"] and self.provider:
+        if self.llm_mode in ["cloud", "local", "local_openai", "lmstudio", "lms"] and self.provider:
             user_content = (
                 f"Sự cố phát hiện tại dây chuyền {line_id}:\n"
                 f"- Loại lỗi: {defect_class}\n"
                 f"- Số sản phẩm liên tiếp: {consecutive_count}\n\n"
                 f"Tài liệu SOP liên quan trích xuất được:\n{sop_context}"
             )
+            if history_context:
+                user_content += f"\n\n{history_context}"
             try:
                 rca_text = self.provider.synthesize_rca(QUALITY_AGENT_SYSTEM_PROMPT, user_content)
                 return {"rca_analysis": rca_text}

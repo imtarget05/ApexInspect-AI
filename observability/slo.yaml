@@ -1,0 +1,39 @@
+# Service-Level Objectives for this repo.
+#
+# Every SLO carries: name, sli (PromQL or gate), target, window, error_budget, alert.
+# `sli: gate` means the objective is enforced by a test/load harness, not by a metric.
+# Ports match prometheus/prometheus.yml; see that file for the scrape list.
+version: "1.0"
+
+constants:
+  P95_LATENCY_SECONDS: 2
+
+targets:
+  - job: apexinspect
+    port: 7860
+    metrics_path: /metrics
+    source: ApexInspect-AI service (see prometheus/prometheus.yml)
+    uncertain: false
+  - job: llm-gateway
+    port: 8787
+    metrics_path: /metrics
+    source: vendored llm-gateway/ in this repo
+    uncertain: false
+
+slos:
+
+  - name: yield-rate
+    sli: apex_yield_rate_ratio
+    target: 0.95
+    window: 7d
+    error_budget: 0.05
+    alert: ServiceDown
+    note: "Below 0.85 the line should be halted (TRIGGER_YIELD_DRIFT)."
+
+  - name: inference-latency
+    sli: apex_avg_inference_ms
+    target: 50
+    window: 7d
+    error_budget: 20%
+    alert: ServiceDown
+    note: "Per-frame vision inference budget documented in docs/observability.md."
