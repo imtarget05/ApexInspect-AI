@@ -209,7 +209,7 @@ The platform ships with a fully automated **GitHub Actions** pipeline:
 | :--- | :--- | :--- |
 | **CI** (`ci.yml`) | Push / PR → `main` | `pytest` test suite (Python 3.11) • Docker image build smoke test |
 | **CD** (`cd.yml`) | Push → `main` | Build + push Docker image to **GHCR** (`ghcr.io/imtarget05/apexinspect-ai:latest`) • Trigger **Render** deploy (autoDeploy + explicit API call) |
-| **Live URLs** | — | API: https://apexinspect-api.onrender.com • Dashboard: https://apexinspect-dashboard.onrender.com |
+| **Live URLs** | — | ⚠️ 2026-09-28: `apexinspect-api.onrender.com` / `apexinspect-dashboard.onrender.com` hiện trả **HTTP 503** (free-tier dừng) — demo bằng `docker compose` / `render.yaml` blueprint, đừng trích link này khi ứng tuyển |
 
 ### Required Secrets & Providers
 

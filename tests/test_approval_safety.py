@@ -11,6 +11,10 @@ Covers the four acceptance criteria agreed for the stability closure:
 4. All tests use a recording PLC double / loopback simulator only - no test may
    emit a command to real hardware.
 """
+import pytest
+
+pytest.importorskip("sqlalchemy", reason="sqlalchemy not installed in this environment")
+
 import os
 import sys
 import unittest

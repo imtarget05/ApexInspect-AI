@@ -1,8 +1,12 @@
+import pytest
+
+pytest.importorskip("numpy", reason="numpy not installed in this environment")
+pytest.importorskip("cv2", reason="cv2 not installed in this environment")
+
 import os
 import sys
 
 import numpy as np
-import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 

@@ -1,0 +1,54 @@
+# Cluster: apexinspect — ApexInspect-AI (visual QC + Edge RCA).
+# Bọc container orphan `apexinspect-api` (trước chạy bằng docker run trên net bridge
+# mặc định) thành compose cluster để quản trị chung: xem scripts/docker-clusters.sh
+#
+#   docker compose -p apexinspect up -d --build
+#   docker compose -p apexinspect logs -f api
+#   docker compose -p apexinspect down        # giữ volume sqlite
+#
+# APP_MODE=api  -> FastAPI :7860 ; APP_MODE != api -> Streamlit console :7860.
+# Giữ container_name cũ để `up` nhận lại orphan thay vì đẻ container thứ hai.
+name: apexinspect
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: apexinspect-ai:latest
+    container_name: apexinspect-api
+    ports:
+      - "${PORT:-7860}:7860"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - APP_MODE=${APP_MODE:-api}
+      - PORT=7860
+      - APEX_LLM_MODE=${APEX_LLM_MODE:-deterministic}
+      - DATABASE_URL=${DATABASE_URL:-}
+      - API_KEY=${API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - apexinspect-data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7860/health/live || curl -fsS http://localhost:7860/_stcore/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - apexinspect-net
+      - portfolio-net
+
+networks:
+  apexinspect-net:
+    driver: bridge
+  portfolio-net:
+    external: true
+    name: portfolio-net
+
+volumes:
+  apexinspect-data:
