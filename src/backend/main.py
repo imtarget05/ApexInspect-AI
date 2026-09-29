@@ -1,4 +1,7 @@
 import os
+import re
+import json
+import time
 import uuid
 import datetime
 import hmac
@@ -8,12 +11,19 @@ from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, Security, status
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse, JSONResponse
+from fastapi import Request
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from .database import get_db, init_db
 from .models import ProductionLine, InspectionLog, MESTicket
 from .schemas import InspectionCreate, InspectionResponse, ActionApprovalRequest, LineMetricsResponse
+
+#: Correlation ID do client gửi lên chỉ được chấp nhận nhiệt liệt nếu khớp
+#: mẫu này. Chấp nhận mọi chuỗi tùy ý nghĩa là log của ta có thể bị chèn
+#: newline giả mạo dòng log khác — log injection.
+_SAFE_CID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 from ..agent.graph import QualityIncidentAgent
 
 _DEVELOPMENT_ENVIRONMENTS = {"", "dev", "development", "local", "test"}
@@ -97,8 +107,51 @@ app.add_middleware(
     allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "X-API-KEY"],
+    allow_headers=["Content-Type", "X-API-KEY", "X-Correlation-ID"],
 )
+
+
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    """
+    Gắn correlation ID cho mọi request để điều tra được một luồng.
+
+    Vì sao cần: khi một inspection bị chặn giữa PLC, MES và DB, log của
+    từng thành phần nằm ở process khác nhau và chỉ liên kết được bằng một
+    mã chung. Không có mã đó, điều tra phải đoán theo thời gian — và
+    điều tra theo thời gian thì chậm và sai.
+
+    ID đến từ client (`X-Correlation-ID`) được giữ nguyên khi hợp lệ, để
+    trace xuyên qua các service khác. ID do ta sinh thì dùng UUID v4.
+
+    ID sinh ra KHÔNG được ghi vào DB theo mặc định: nó do người gọi kiểm
+    soát, và lưu nó mở đường cho log injection. Ở đây nó chỉ đi kèm log
+    của request, do chính process sinh ra.
+    """
+    inbound = request.headers.get("X-Correlation-ID", "")
+    cid = inbound[:64] if _SAFE_CID.match(inbound) else uuid.uuid4().hex
+    request.state.correlation_id = cid
+    started = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    response.headers["X-Correlation-ID"] = cid
+    # Log có cấu trúc: một dòng JSON mỗi request, thay vì dòng access log
+    # không có ngữ cảnh. Đây là nơi người ta grep khi điều tra.
+    print(json.dumps({
+        # File này import `datetime` là MODULE, không phải class. Viết
+        # `datetime.now(...)` sẽ ném AttributeError và làm mọi request 500.
+        # `timezone` thì lấy từ module datetime.
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "level": "INFO",
+        "service": "apexinspect-gateway",
+        "event": "http_request",
+        "correlation_id": cid,
+        "method": request.method,
+        "path": request.url.path,
+        "status_code": response.status_code,
+        "duration_ms": round(elapsed_ms, 2),
+    }), flush=True)
+    return response
 
 @app.get("/health")
 def health_check():
