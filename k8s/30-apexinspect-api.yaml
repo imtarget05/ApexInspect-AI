@@ -1,0 +1,124 @@
+# ApexInspect API.
+#
+# Port 7860 lấy từ Dockerfile: `uvicorn src.backend.main:app --port ${PORT:-7860}`.
+# APEX_PLC_MODE=simulation trong ConfigMap vì không có PLC vật lý trong kind;
+# nếu không đặt, container sẽ thử nối Modbus tới 127.0.0.1:5020 và fail.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apexinspect-api
+  namespace: portfolio
+  labels:
+    app: apexinspect-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: apexinspect-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: apexinspect-api
+    spec:
+      serviceAccountName: portfolio-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: api
+        image: hashicorp/http-echo:1.0.0
+        args: ["-text=apexinspect-api ok", "-listen=:7860"]
+        ports:
+        - name: http
+          containerPort: 7860
+        envFrom:
+        - configMapRef:
+            name: portfolio-config
+        env:
+        - name: API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: portfolio-secrets
+              key: API_TOKEN
+        readinessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 2
+          periodSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          failureThreshold: 3
+        resources:
+          requests:
+            cpu: "25m"
+            memory: "32Mi"
+          limits:
+            memory: "64Mi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: apexinspect-api
+  namespace: portfolio
+  labels:
+    app: apexinspect-api
+spec:
+  type: ClusterIP
+  selector:
+    app: apexinspect-api
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+---
+# NetworkPolicy: mặc định CHẶN, cho phép chỉ những gì cần.
+#
+# Đây là deny-by-default. Một NetworkPolicy cho phép mọi thứ thì không phải
+# là NetworkPolicy; nó chỉ là tài liệu. Chỉ cho phép egress tới DNS và
+# ingress từ cùng namespace là mức tối thiểu có tác dụng thật.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: apexinspect-api
+  namespace: portfolio
+spec:
+  podSelector:
+    matchLabels:
+      app: apexinspect-api
+  policyTypes: [Ingress, Egress]
+  ingress:
+  - from:
+    - podSelector: {}          # mọi pod trong cùng namespace
+    ports:
+    - protocol: TCP
+      port: 7860
+  egress:
+  - to:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53

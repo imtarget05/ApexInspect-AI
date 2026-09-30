@@ -131,11 +131,17 @@ class HighResPatchInferencer:
         self.detector.require_model()
 
         all_detections: List[Dict[str, Any]] = []
+        # P0-02: patches the quality gate refused to rule on. See the
+        # per-patch handling below for why this changes the aggregate result.
+        unverifiable_patches = 0
 
         # 1. Global context pass (resized full image) if requested
         if include_full_image:
             _, global_dets, _ = self.detector.infer(img, ground_truth_defects=ground_truth)
-            all_detections.extend(global_dets)
+            if global_dets is None:
+                unverifiable_patches += 1
+            else:
+                all_detections.extend(global_dets)
 
         # 2. Sliced patch inference
         slices = self.generate_slices(img_h, img_w)
@@ -164,6 +170,23 @@ class HighResPatchInferencer:
 
             _, patch_dets, _ = self.detector.infer(patch, ground_truth_defects=patch_gt)
 
+            # P0-02: a patch the quality gate rejected returns None (no
+            # verdict), not []. Two consequences, both deliberate:
+            #
+            #   * None must never be iterated -- `for det in None` is a
+            #     TypeError, and an edge slice narrower than MIN_SIZE hits
+            #     this path on every oversized board.
+            #   * An unverifiable patch means the board was NOT fully
+            #     inspected. Positive evidence of a defect is still valid
+            #     (a real defect in a real patch is a real defect), but the
+            #     ABSENCE of a defect in the unverifiable patches is not
+            #     evidence of cleanliness. So a clean aggregate is only
+            #     returned when every patch was actually inspected;
+            #     otherwise the whole board is reported as no-verdict.
+            if patch_dets is None:
+                unverifiable_patches += 1
+                continue
+
             # Offset patch coordinates to full image space
             for det in patch_dets:
                 bx1, by1, bx2, by2 = det.get("bbox", [0, 0, 0, 0])
@@ -176,9 +199,28 @@ class HighResPatchInferencer:
         # 3. Global Non-Maximum Suppression
         merged_detections = self.apply_global_nms(all_detections)
 
+        # P0-02: if any tile could not be inspected AND nothing was found, the
+        # board was not fully examined, so "no defects" is not a supportable
+        # conclusion. Report no-verdict instead of a false clean. A positive
+        # detection is still returned: a defect seen in an inspected tile is
+        # real evidence regardless of what happened to its neighbours.
+        if merged_detections:
+            final_detections = merged_detections
+        elif unverifiable_patches:
+            final_detections = None
+        else:
+            final_detections = merged_detections
+
         total_latency_ms = (time.perf_counter() - start_time) * 1000.0
 
-        # 4. Render annotations on high-res frame
-        annotated_frame = self.detector.render_annotations(img.copy(), merged_detections, total_latency_ms)
+        # 4. Render annotations on high-res frame. When the aggregate is a
+        # no-verdict the HUD is told explicitly, so it shows the amber
+        # UNKNOWN banner rather than a green PASS.
+        annotated_frame = self.detector.render_annotations(
+            img.copy(), merged_detections, total_latency_ms,
+            status="UNKNOWN" if final_detections is None else None,
+            detail=(f"{unverifiable_patches} tile(s) could not be inspected"
+                    if final_detections is None else None),
+        )
 
-        return annotated_frame, merged_detections, total_latency_ms
+        return annotated_frame, final_detections, total_latency_ms

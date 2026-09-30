@@ -72,9 +72,17 @@ class TestHighResPatching(unittest.TestCase):
             self.detector.require_model()
         except ModelUnavailableError as exc:
             self.skipTest(f"ONNX model unavailable on this host: {exc}")
-        # Create a green PCB-like canvas
-        high_res_canvas = np.zeros((1000, 1000, 3), dtype=np.uint8)
-        high_res_canvas[:, :] = (34, 139, 34)
+        # A textured, mid-brightness board. This was a uniform green canvas,
+        # which has zero Laplacian variance, so the quality gate rejects it
+        # for blur -- and after P0-02 a rejected tile yields no-verdict rather
+        # than an empty detection list. A flat colour field is not a board.
+        high_res_canvas = np.full((1000, 1000, 3), (34, 139, 34), dtype=np.uint8)
+        rng = np.random.default_rng(5)
+        for _ in range(400):
+            x, y = rng.integers(0, 984, size=2)
+            high_res_canvas[y:y + 16, x:x + 16] = rng.integers(
+                0, 255, size=(16, 16, 3), dtype=np.uint8
+            )
 
         ann, dets, lat_ms = self.inferencer.infer_high_res(
             high_res_canvas,

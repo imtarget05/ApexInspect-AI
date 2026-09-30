@@ -69,3 +69,6 @@ notebooks/data.yaml
 
 # eval run artifacts (CI uploads these, never committed)
 eval/reports/
+
+# Local venv (moved inside repo 2026-09-29)
+.venv-apex2/

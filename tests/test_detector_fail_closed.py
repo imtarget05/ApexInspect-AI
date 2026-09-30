@@ -103,11 +103,26 @@ def test_corrupt_model_does_not_report_a_pass(tmp_path, monkeypatch):
 
 
 def test_loaded_model_still_returns_a_list_and_a_real_latency(monkeypatch):
-    """Guard against over-correction: a working model returns [] plus a number."""
+    """Guard against over-correction: a working model returns [] plus a number.
+
+    The frame must be one the quality gate ACCEPTS. This used to pass a
+    uniform black canvas, which the gate rejects for blur (Laplacian variance
+    0) -- so after P0-02 it returned None and this test failed. The assertion
+    is still the right one; only the fixture was wrong, because an all-zero
+    array is not a photograph of a board. A sharp, mid-brightness textured
+    frame is.
+    """
     det = PCBDefectDetector()
     if not det.use_onnx:
         pytest.skip("committed model unavailable in this environment")
-    _, dets, latency = det.infer(FRAME)
+
+    rng = np.random.default_rng(11)
+    good = np.full((640, 640, 3), 120, dtype=np.uint8)
+    for _ in range(40):
+        x, y = rng.integers(0, 632, size=2)
+        good[y:y + 8, x:x + 8] = rng.integers(0, 255, size=(8, 8, 3), dtype=np.uint8)
+
+    _, dets, latency = det.infer(good)
     assert isinstance(dets, list)
     assert latency is not None and latency > 0.0
     det.require_model()

@@ -291,8 +291,10 @@ class PCBDefectDetector:
         Returns:
             annotated_frame: Image with bounding boxes and HUD.
             detections: List of defect detections, or None when no verdict could
-                be reached (model unavailable) -- None is deliberately distinct
-                from [], which means "inspected, no defects found".
+                be reached -- None is deliberately distinct from [], which means
+                "inspected, no defects found". None is returned in BOTH
+                no-verdict cases: the model is unavailable, and the quality
+                gate rejected the frame. Neither is evidence about the board.
             latency_ms: Inference time in milliseconds, or None when no
                 inference ran. Never a fabricated placeholder.
 
@@ -308,9 +310,27 @@ class PCBDefectDetector:
             from src.vision.quality import check_frame
             q = check_frame(frame)
             if not q["ok"]:
+                # P0-02: a rejected frame is an INSPECTION FAILURE, not a clean
+                # board. It used to return `[]` here, which every consumer reads
+                # as "inspected, no defects found": the UI wrote a clean
+                # telemetry row (resetting the 3-consecutive-defect trigger),
+                # PatchDetector merged it into an empty aggregate, and the HUD
+                # painted a green PASS. An unusable observation was therefore
+                # reported as a negative result -- a false negative produced by
+                # the failure of the evidence-gathering step itself.
+                #
+                # `None` is the no-verdict value the docstring already defines,
+                # so consumers that handle "model unavailable" already handle
+                # this correctly. latency_ms is reported because the measurement
+                # was genuinely taken; the annotation is explicitly UNKNOWN so
+                # the HUD cannot render a PASS.
                 print(f"[Detector] reject frame: {q['reason']} lap_var={q['laplacian_var']:.1f} bright={q['brightness']:.1f}")
                 latency_ms = (time.perf_counter() - start_time) * 1000.0
-                return self.render_annotations(frame.copy(), [], latency_ms), [], latency_ms
+                annotated = self.render_annotations(
+                    frame.copy(), [], latency_ms,
+                    status="UNKNOWN", detail=f"frame rejected: {q['reason']}",
+                )
+                return annotated, None, latency_ms
             blob = self.preprocess(frame)
             raw_outputs = self.session.run([self.output_name], {self.input_name: blob})[0]
             detections = self._postprocess_yolov8(raw_outputs, orig_w=w, orig_h=h)

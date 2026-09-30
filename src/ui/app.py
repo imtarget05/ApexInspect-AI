@@ -398,16 +398,23 @@ with tab_vision:
             st.session_state.last_latency = latency_ms
 
             if detections is None:
-                # Model unavailable: infer() returned no verdict. Do NOT record a
-                # telemetry row, because a row is what drives the 3-consecutive-
-                # defect trigger, and "not inspected" is not "not defective".
+                # No verdict: either the model is unavailable or the quality
+                # gate rejected this frame. Do NOT record a telemetry row,
+                # because a row is what drives the 3-consecutive-defect
+                # trigger, and "not inspected" is not "not defective".
+                #
+                # This must `continue`: the code below calls len(detections),
+                # which raises TypeError on None. Previously the model-
+                # unavailable branch fell straight through into it, so the
+                # "graceful" no-verdict path was in fact a crash.
                 st.warning(
                     "Detection unavailable - no inspection recorded. "
-                    + str(getattr(st.session_state.detector, "load_error", "") or
-                          "the ONNX model could not be loaded.")
+                    + str(getattr(st.session_state.detector, "load_error", "")
+                          or "no defect verdict was possible for this frame.")
                 )
                 step_inspect = False
                 continuous_run = False
+                continue
 
             # Ingest telemetry & evaluate triggers via unified InspectionService
             is_def = len(detections) > 0
