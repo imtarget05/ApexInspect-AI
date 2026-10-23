@@ -1,0 +1,38 @@
+# Dockerfile for training
+# Based on NVIDIA PyTorch container with CUDA 12.1
+FROM nvcr.io/nvidia/pytorch:24.04-py3
+
+# Set working directory
+WORKDIR /workspace
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgl1-mesa-glx \
+    wget \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+
+# Install project in development mode
+COPY src/ ./src/
+RUN pip install -e ./src
+
+# Copy scripts and configs
+COPY scripts/ ./scripts/
+COPY configs/ ./configs/
+
+# Set environment variables
+ENV PYTHONPATH=/workspace/src:$PYTHONPATH
+ENV TORCH_HOME=/workspace/.cache/torch
+ENV HF_HOME=/workspace/.cache/huggingface
+
+# Default command
+CMD ["bash"]

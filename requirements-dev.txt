@@ -1,0 +1,23 @@
+# Development dependencies
+-r requirements.txt
+
+# Testing
+pytest==8.2.1
+pytest-cov==5.0.0
+pytest-mock==3.14.0
+pytest-asyncio==0.23.3
+
+# Code Quality
+ruff==0.5.3
+black==24.3.0
+mypy==1.10.0
+pre-commit==3.7.1
+
+# Documentation
+mkdocs==1.5.3
+mkdocs-material==9.5.17
+mkdocstrings[python]==1.14.0
+
+# Profiling
+py-spy==0.3.14
+scalene==1.5.28

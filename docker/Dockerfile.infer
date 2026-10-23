@@ -1,0 +1,28 @@
+# Dockerfile for inference (TensorRT optimized)
+# Based on NVIDIA TensorRT container
+FROM nvcr.io/nvidia/tensorrt:24.04-py3
+
+WORKDIR /workspace
+
+# Install Python dependencies
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install project
+COPY src/ ./src/
+RUN pip install -e ./src
+
+# Copy scripts and configs
+COPY scripts/ ./scripts/
+COPY configs/ ./configs/
+
+# Model directory (mount at runtime)
+RUN mkdir -p /models
+
+# Environment variables
+ENV PYTHONPATH=/workspace/src:$PYTHONPATH
+ENV TRT_LOGGER_SEVERITY=3
+
+# Default command - serve with FastAPI
+EXPOSE 8000
+CMD ["python", "-m", "apexinspect.deployment.fastapi", "--model-path", "/models/model.engine", "--backend", "tensorrt", "--port", "8000"]

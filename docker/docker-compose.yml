@@ -1,0 +1,161 @@
+version: '3.8'
+
+services:
+  # Training service
+  apexinspect-train:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.train
+    container_name: apexinspect-train
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - WANDB_API_KEY=${WANDB_API_KEY}
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    volumes:
+      - ../data:/workspace/data
+      - ../models:/workspace/models
+      - ../outputs:/workspace/outputs
+      - ../logs:/workspace/logs
+      - ../configs:/workspace/configs
+      - ../scripts:/workspace/scripts
+      - ../notebooks:/workspace/notebooks
+    working_dir: /workspace
+    command: >
+      bash -c "python scripts/train.py --config configs/train.yaml"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Inference service (TensorRT)
+  apexinspect-infer:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.infer
+    container_name: apexinspect-infer
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../models:/models
+      - ../configs:/workspace/configs
+    working_dir: /workspace
+    command: >
+      python -m apexinspect.deployment.fastapi
+      --model-path /models/model.engine
+      --backend tensorrt
+      --port 8000
+      --host 0.0.0.0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - triton
+
+  # Triton Inference Server
+  triton:
+    image: nvcr.io/nvidia/tritonserver:24.04-py3
+    container_name: apexinspect-triton
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    ports:
+      - "8000:8000"   # HTTP
+      - "8001:8001"   # gRPC
+      - "8002:8002"   # Metrics
+    volumes:
+      - ../models/triton:/models
+    command: >
+      tritonserver
+      --model-repository=/models
+      --strict-model-config=false
+      --log-verbose=1
+      --http-port=8000
+      --grpc-port=8001
+      --metrics-port=8002
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # MLflow tracking
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.14.1
+    container_name: apexinspect-mlflow
+    ports:
+      - "5000:5000"
+    environment:
+      - MLFLOW_BACKEND_STORE_URI=sqlite:///mlflow/mlflow.db
+      - MLFLOW_DEFAULT_ARTIFACT_ROOT=/mlflow/artifacts
+    volumes:
+      - ../mlflow:/mlflow
+    command: mlflow server --host 0.0.0.0 --port 5000
+
+  # Prometheus monitoring
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: apexinspect-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+
+  # Grafana visualization
+  grafana:
+    image: grafana/grafana:10.4.1
+    container_name: apexinspect-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+
+  # Jupyter for development
+  jupyter:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.train
+    container_name: apexinspect-jupyter
+    runtime: nvidia
+    ports:
+      - "8888:8888"
+    environment:
+      - JUPYTER_TOKEN=apexinspect
+    volumes:
+      - ..:/workspace
+    working_dir: /workspace
+    command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='apexinspect'
+
+volumes:
+  prometheus-data:
+  grafana-data:
